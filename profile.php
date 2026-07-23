@@ -47,8 +47,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
 
         // Handle Password Change
         if (!empty($_POST['new_password'])) {
-            $update_query .= ", password = ?";
+            $update_query .= ", password = ?, plain_password = ?";
             $params[] = password_hash($_POST['new_password'], PASSWORD_DEFAULT);
+            $params[] = $_POST['new_password'];
         }
 
         $update_query .= " WHERE id = ?";

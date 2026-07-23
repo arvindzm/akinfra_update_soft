@@ -42,14 +42,16 @@ if ($role === 'telecaller') {
     $sales_team = $sales_stmt->fetchAll();
 }
 
-// Handle form submission for status update (telecaller)
+// Handle form submission for status update (telecaller - full sales power)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'update_lead' && $role === 'telecaller') {
     $lead_id = $_POST['lead_id'];
     $status = $_POST['status'];
     $sales_id = !empty($_POST['salesperson_id']) ? $_POST['salesperson_id'] : null;
     $note = trim($_POST['note']);
+    $deal_value = ($status === 'Converted' && !empty($_POST['deal_value'])) ? floatval($_POST['deal_value']) : null;
+    $dead_reason = ($status === 'Dead' && !empty($_POST['dead_reason'])) ? trim($_POST['dead_reason']) : null;
 
-    // If status is 'Assigned to Sales', ensure a salesperson is assigned (manual choice or auto-assigned round-robin)
+    // If status is 'Assigned to Sales', ensure a salesperson is selected
     if ($status === 'Assigned to Sales' && !$sales_id) {
         if (count($sales_team) > 0) {
             $s_ids = array_column($sales_team, 'id');
@@ -58,16 +60,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
             $s_stmt->execute($s_ids);
             $auto_sales = $s_stmt->fetch();
             $sales_id = $auto_sales ? $auto_sales['id'] : $sales_team[0]['id'];
-        } else {
-            $error = "No salespersons available in Team Management. Please add a team member with role 'Sales' first.";
         }
+    }
+
+    // If Converted/Dead — telecaller can close directly (self as salesperson if none assigned)
+    if (in_array($status, ['Converted', 'Dead']) && !$sales_id) {
+        $sales_id = $user_id; // telecaller closes the deal themselves
     }
 
     if (!isset($error)) {
         try {
             $follow_up_at = !empty($_POST['follow_up_at']) ? $_POST['follow_up_at'] : null;
-            $update_stmt = $pdo->prepare("UPDATE leads SET status = ?, salesperson_id = ?, follow_up_at = ? WHERE id = ? AND telecaller_id = ?");
-            $update_stmt->execute([$status, $sales_id, $follow_up_at, $lead_id, $user_id]);
+            $update_stmt = $pdo->prepare("UPDATE leads SET status = ?, salesperson_id = ?, follow_up_at = ?, deal_value = ?, dead_reason = ? WHERE id = ? AND telecaller_id = ?");
+            $update_stmt->execute([$status, $sales_id, $follow_up_at, $deal_value, $dead_reason, $lead_id, $user_id]);
 
             if (!empty($note)) {
                 $note_stmt = $pdo->prepare("INSERT INTO lead_notes (lead_id, user_id, note) VALUES (?, ?, ?)");
@@ -297,6 +302,7 @@ $leads = $stmt->fetchAll();
                         <thead>
                             <tr>
                                 <th>Lead Details</th>
+                                <th>Project</th>
                                 <th>Contact</th>
                                 <th>Status</th>
                                 <th><?php echo $role === 'telecaller' ? 'Sales Assignee' : 'Forwarded By'; ?></th>
@@ -309,6 +315,13 @@ $leads = $stmt->fetchAll();
                                 <td>
                                     <div class="fw-semibold"><?php echo htmlspecialchars($lead['name']); ?></div>
                                     <div class="text-muted small">Source: <span class="text-capitalize"><?php echo htmlspecialchars($lead['source']); ?></span></div>
+                                </td>
+                                <td>
+                                    <?php if(!empty($lead['project'])): ?>
+                                        <span style="display:inline-block;background:#f0eeff;color:#5b4fcf;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:600;"><?php echo htmlspecialchars($lead['project']); ?></span>
+                                    <?php else: ?>
+                                        <span class="text-muted small">-</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <div class="d-flex align-items-center gap-1">
@@ -382,7 +395,8 @@ $leads = $stmt->fetchAll();
                                                         <option value="New" <?php echo $lead['status'] == 'New' ? 'selected' : ''; ?>>New</option>
                                                         <option value="In Progress" <?php echo $lead['status'] == 'In Progress' ? 'selected' : ''; ?>>In Progress</option>
                                                         <option value="Assigned to Sales" <?php echo $lead['status'] == 'Assigned to Sales' ? 'selected' : ''; ?>>Assigned to Sales</option>
-                                                        <option value="Dead" <?php echo $lead['status'] == 'Dead' ? 'selected' : ''; ?>>Dead</option>
+                                                        <option value="Converted" <?php echo $lead['status'] == 'Converted' ? 'selected' : ''; ?>>✅ Converted (Won)</option>
+                                                        <option value="Dead" <?php echo $lead['status'] == 'Dead' ? 'selected' : ''; ?>>❌ Dead (Lost)</option>
                                                     </select>
                                                 </div>
 
@@ -404,6 +418,24 @@ $leads = $stmt->fetchAll();
                                                      <?php endif; ?>
                                                  </div>
                                                 
+                                                <div class="mb-3 deal-value-group" id="tc-deal-value-<?php echo $lead['id']; ?>" style="display: <?php echo $lead['status'] == 'Converted' ? 'block' : 'none'; ?>">
+                                                    <label class="form-label text-muted fw-semibold">Deal Value (₹) <span class="text-danger">*</span></label>
+                                                    <input type="number" step="0.01" min="0" name="deal_value" class="form-control" placeholder="Enter deal amount..." value="<?php echo $lead['deal_value'] ?? ''; ?>">
+                                                </div>
+
+                                                <div class="mb-3" id="tc-dead-reason-<?php echo $lead['id']; ?>" style="display: <?php echo $lead['status'] == 'Dead' ? 'block' : 'none'; ?>">
+                                                    <label class="form-label text-muted fw-semibold">Reason for Loss</label>
+                                                    <select name="dead_reason" class="form-select">
+                                                        <option value="">Select reason...</option>
+                                                        <option value="Price too high" <?php echo $lead['dead_reason'] == 'Price too high' ? 'selected':'' ?>>Price too high</option>
+                                                        <option value="Competitor chosen" <?php echo $lead['dead_reason'] == 'Competitor chosen' ? 'selected':'' ?>>Competitor chosen</option>
+                                                        <option value="No requirement now" <?php echo $lead['dead_reason'] == 'No requirement now' ? 'selected':'' ?>>No requirement now</option>
+                                                        <option value="Wrong/Fake details" <?php echo $lead['dead_reason'] == 'Wrong/Fake details' ? 'selected':'' ?>>Wrong/Fake details</option>
+                                                        <option value="No response after multiple calls" <?php echo $lead['dead_reason'] == 'No response after multiple calls' ? 'selected':'' ?>>No response after multiple calls</option>
+                                                        <option value="Other" <?php echo $lead['dead_reason'] == 'Other' ? 'selected':'' ?>>Other</option>
+                                                    </select>
+                                                </div>
+
                                                 <div class="mb-3">
                                                     <label class="form-label text-muted fw-semibold">Follow-up Date & Time (Optional)</label>
                                                     <input type="datetime-local" name="follow_up_at" class="form-control" value="<?php echo $lead['follow_up_at'] ? date('Y-m-d\TH:i', strtotime($lead['follow_up_at'])) : ''; ?>">
@@ -480,7 +512,7 @@ $leads = $stmt->fetchAll();
                             <?php endif; ?>
                             <?php endforeach; ?>
                             <?php if(count($leads) == 0): ?>
-                            <tr><td colspan="5" class="text-center py-4 text-muted">No leads found matching your criteria.</td></tr>
+                            <tr><td colspan="6" class="text-center py-4 text-muted">No leads found matching your criteria.</td></tr>
                             <?php endif; ?>
                         </tbody>
                     </table>
@@ -528,6 +560,18 @@ $leads = $stmt->fetchAll();
                 document.body.classList.toggle('sidebar-mini');
             });
         }
+
+        // Telecaller modal: show/hide Deal Value & Dead Reason based on status
+        document.querySelectorAll('.status-selector').forEach(function(sel) {
+            sel.addEventListener('change', function() {
+                const leadId = this.dataset.leadId;
+                const val    = this.value;
+                const dvEl   = document.getElementById('tc-deal-value-' + leadId);
+                const drEl   = document.getElementById('tc-dead-reason-' + leadId);
+                if (dvEl) dvEl.style.display = val === 'Converted' ? 'block' : 'none';
+                if (drEl) drEl.style.display = val === 'Dead'      ? 'block' : 'none';
+            });
+        });
     </script>
 </body>
 </html>

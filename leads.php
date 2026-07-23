@@ -31,12 +31,19 @@ if (isset($_GET['redistribute_unassigned'])) {
     }
 }
 
+// Handle Bulk Auto-Assignment by Project
+if (isset($_GET['auto_assign_all_leads'])) {
+    $cnt = autoAssignAllLeadsByProject($pdo);
+    $success = "Successfully categorized and distributed {$cnt} lead(s) to their respective project team members!";
+}
+
 // Fetch count of unassigned leads
 $unassigned_leads_count = $pdo->query("SELECT COUNT(*) FROM leads WHERE telecaller_id IS NULL OR telecaller_id NOT IN (SELECT id FROM users WHERE role = 'telecaller')")->fetchColumn();
 
 // Handle Search and Filter
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
+$project_filter = isset($_GET['project']) ? trim($_GET['project']) : '';
 
 $query = "
     SELECT l.*, t.name as telecaller_name, s.name as sales_name 
@@ -76,6 +83,11 @@ if ($status_filter !== '') {
     $params[] = $status_filter;
 }
 
+if ($project_filter !== '') {
+    $query .= " AND l.project = ?";
+    $params[] = $project_filter;
+}
+
 $query .= " ORDER BY l.created_at DESC";
 
 $stmt = $pdo->prepare($query);
@@ -107,6 +119,7 @@ $leads = $stmt->fetchAll();
             <li><a href="index.php"><i class="fa-solid fa-house"></i> <span class="nav-text">Dashboard</span></a></li>
             <li><a href="users.php"><i class="fa-solid fa-users"></i> <span class="nav-text">Team Management</span></a></li>
             <li class="active"><a href="leads.php"><i class="fa-solid fa-database"></i> <span class="nav-text">All Leads</span></a></li>
+            <li><a href="projects.php"><i class="fa-solid fa-building"></i> <span class="nav-text">Project Assignments</span></a></li>
         </ul>
     </nav>
 
@@ -168,6 +181,17 @@ $leads = $stmt->fetchAll();
                             <input type="text" name="search" class="form-control" placeholder="Name, Phone, or Email..." value="<?php echo htmlspecialchars($search); ?>">
                         </div>
                         <div class="col-lg-3 col-md-3">
+                            <label class="form-label text-muted fw-semibold small">Project</label>
+                            <select name="project" class="form-select">
+                                <option value="">All Projects</option>
+                                <?php
+                                $proj_list = $pdo->query("SELECT DISTINCT project FROM leads WHERE project IS NOT NULL AND project != '' ORDER BY project")->fetchAll(PDO::FETCH_COLUMN);
+                                foreach($proj_list as $pl): ?>
+                                    <option value="<?php echo htmlspecialchars($pl); ?>" <?php echo (isset($_GET['project']) && $_GET['project'] == $pl) ? 'selected' : ''; ?>><?php echo htmlspecialchars($pl); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-lg-2 col-md-2">
                             <label class="form-label text-muted fw-semibold small">Status</label>
                             <select name="status" class="form-select">
                                 <option value="">All Statuses</option>
@@ -193,11 +217,16 @@ $leads = $stmt->fetchAll();
             <div class="table-card">
                 <div class="table-header d-flex flex-column flex-sm-row justify-content-between align-items-start align-items-sm-center gap-3">
                     <h5 class="mb-0">Complete Leads Database (<?php echo count($leads); ?> found)</h5>
-                    <?php if($unassigned_leads_count > 0): ?>
-                    <a href="leads.php?redistribute_unassigned=1" class="btn btn-warning shadow-sm" onclick="return confirm('Distribute <?php echo $unassigned_leads_count; ?> unassigned lead(s) equally among all active telecallers?');">
-                        <i class="fa-solid fa-arrows-rotate me-2"></i>Redistribute Unassigned Leads (<?php echo $unassigned_leads_count; ?>)
-                    </a>
-                    <?php endif; ?>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <a href="leads.php?auto_assign_all_leads=1" class="btn btn-success shadow-sm fw-semibold" onclick="return confirm('Sabhi leads ko unke respective project team members (Mansi, Rishi, Samiksha, etc.) mein auto-distribute kar dein?');">
+                            <i class="fa-solid fa-bolt me-2"></i>Distribute All Leads by Project
+                        </a>
+                        <?php if($unassigned_leads_count > 0): ?>
+                        <a href="leads.php?redistribute_unassigned=1" class="btn btn-warning shadow-sm" onclick="return confirm('Distribute <?php echo $unassigned_leads_count; ?> unassigned lead(s) equally among all active telecallers?');">
+                            <i class="fa-solid fa-arrows-rotate me-2"></i>Redistribute Unassigned Leads (<?php echo $unassigned_leads_count; ?>)
+                        </a>
+                        <?php endif; ?>
+                    </div>
                 </div>
 
                 <div class="table-responsive">
@@ -205,6 +234,7 @@ $leads = $stmt->fetchAll();
                         <thead>
                             <tr>
                                 <th>Lead Details</th>
+                                <th>Project</th>
                                 <th>Source</th>
                                 <th>Telecaller</th>
                                 <th>Salesperson</th>
@@ -225,6 +255,13 @@ $leads = $stmt->fetchAll();
                                             <i class="fa-brands fa-whatsapp fw-bold"></i>
                                         </a>
                                     </div>
+                                </td>
+                                <td>
+                                    <?php if(!empty($lead['project'])): ?>
+                                        <span style="display:inline-block;background:#f0eeff;color:#5b4fcf;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:600;"><?php echo htmlspecialchars($lead['project']); ?></span>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td><span class="text-capitalize text-muted"><?php echo htmlspecialchars($lead['source']); ?></span></td>
                                 <td><?php echo htmlspecialchars($lead['telecaller_name'] ?? '-'); ?></td>
@@ -251,7 +288,7 @@ $leads = $stmt->fetchAll();
                             </tr>
                             <?php endforeach; ?>
                             <?php if(count($leads) == 0): ?>
-                            <tr><td colspan="7" class="text-center py-4 text-muted">No leads found matching your filters.</td></tr>
+                            <tr><td colspan="8" class="text-center py-4 text-muted">No leads found matching your filters.</td></tr>
                             <?php endif; ?>
                         </tbody>
                     </table>

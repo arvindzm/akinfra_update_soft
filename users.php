@@ -36,8 +36,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
 
     if (!isset($error)) {
         try {
-            $stmt = $pdo->prepare("INSERT INTO users (name, email, phone, designation, address, profile_image, password, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([$name, $email, $phone, $designation, $address, $profile_image, $password, $role]);
+            $raw_password = $_POST['password'];
+            $stmt = $pdo->prepare("INSERT INTO users (name, email, phone, designation, address, profile_image, password, plain_password, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$name, $email, $phone, $designation, $address, $profile_image, $password, $raw_password, $role]);
             
             // Send Email to new user
             require_once 'includes/mailer.php';
@@ -90,8 +91,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
 
     // Handle Password Change if provided
     if (!empty($_POST['password'])) {
-        $update_query = "UPDATE users SET name=?, phone=?, designation=?, address=?, role=?, password=? WHERE id=?";
-        $params = [$name, $phone, $designation, $address, $role, password_hash($_POST['password'], PASSWORD_DEFAULT), $edit_id];
+        $raw_password = $_POST['password'];
+        $update_query = "UPDATE users SET name=?, phone=?, designation=?, address=?, role=?, password=?, plain_password=? WHERE id=?";
+        $params = [$name, $phone, $designation, $address, $role, password_hash($raw_password, PASSWORD_DEFAULT), $raw_password, $edit_id];
     }
     
     try {
@@ -151,7 +153,7 @@ if (isset($_GET['delete'])) {
 $unassigned_leads_count = $pdo->query("SELECT COUNT(*) FROM leads WHERE telecaller_id IS NULL OR telecaller_id NOT IN (SELECT id FROM users WHERE role = 'telecaller')")->fetchColumn();
 
 // Fetch all users
-$stmt = $pdo->query("SELECT id, name, email, phone, designation, profile_image, role, created_at FROM users ORDER BY created_at DESC");
+$stmt = $pdo->query("SELECT id, name, email, phone, designation, profile_image, password, plain_password, role, created_at FROM users ORDER BY created_at DESC");
 $users = $stmt->fetchAll();
 ?>
 <!DOCTYPE html>
@@ -255,6 +257,7 @@ $users = $stmt->fetchAll();
                             <tr>
                                 <th>User</th>
                                 <th>Contact Details</th>
+                                <th>Password</th>
                                 <th>Role</th>
                                 <th>Joined Date</th>
                                 <th>Actions</th>
@@ -281,6 +284,15 @@ $users = $stmt->fetchAll();
                                     <div class="text-muted small mt-1"><i class="fa-solid fa-phone me-2"></i><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></div>
                                 </td>
                                 <td>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span class="password-mask font-monospace small" id="pass_mask_<?php echo $user['id']; ?>">••••••••</span>
+                                        <span class="password-real font-monospace small d-none text-primary fw-bold" id="pass_real_<?php echo $user['id']; ?>"><?php echo htmlspecialchars($user['plain_password'] ?? 'N/A'); ?></span>
+                                        <button type="button" class="btn btn-sm btn-light p-1 border-0" onclick="toggleRowPassword(<?php echo $user['id']; ?>)" title="View Password">
+                                            <i class="fa-regular fa-eye text-muted" id="pass_icon_<?php echo $user['id']; ?>"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                                <td>
                                     <?php 
                                         $role_class = 'bg-secondary';
                                         if($user['role'] == 'admin') $role_class = 'bg-danger';
@@ -301,7 +313,8 @@ $users = $stmt->fetchAll();
                                                 "phone" => $user["phone"] ?? "",
                                                 "designation" => $user["designation"] ?? "",
                                                 "address" => $user["address"] ?? "",
-                                                "role" => $user["role"]
+                                                "role" => $user["role"],
+                                                "plain_password" => $user["plain_password"] ?? ""
                                             ])); ?>'>
                                         <i class="fa-solid fa-pen"></i>
                                     </button>
@@ -435,9 +448,9 @@ $users = $stmt->fetchAll();
 
                         <div class="row">
                             <div class="col-md-6 mb-3">
-                                <label class="form-label text-muted fw-semibold">New Password <small>(Leave blank to keep)</small></label>
+                                <label class="form-label text-muted fw-semibold">Password</label>
                                 <div class="password-wrapper">
-                                    <input type="password" name="password" id="edit_password" class="form-control" placeholder="New password">
+                                    <input type="password" name="password" id="edit_password" class="form-control" placeholder="Enter password">
                                     <i class="fa-regular fa-eye toggle-password" onclick="togglePassword('edit_password', this)"></i>
                                 </div>
                             </div>
@@ -475,6 +488,23 @@ $users = $stmt->fetchAll();
             }
         }
 
+        function toggleRowPassword(userId) {
+            const mask = document.getElementById('pass_mask_' + userId);
+            const real = document.getElementById('pass_real_' + userId);
+            const icon = document.getElementById('pass_icon_' + userId);
+            if (real.classList.contains('d-none')) {
+                real.classList.remove('d-none');
+                mask.classList.add('d-none');
+                icon.classList.remove('fa-eye');
+                icon.classList.add('fa-eye-slash');
+            } else {
+                real.classList.add('d-none');
+                mask.classList.remove('d-none');
+                icon.classList.remove('fa-eye-slash');
+                icon.classList.add('fa-eye');
+            }
+        }
+
         function openEditUserModal(btn) {
             try {
                 var b64Data = btn.getAttribute('data-user');
@@ -487,6 +517,7 @@ $users = $stmt->fetchAll();
                 document.getElementById('edit_designation').value = user.designation || '';
                 document.getElementById('edit_address').value = user.address || '';
                 document.getElementById('edit_role').value = user.role;
+                document.getElementById('edit_password').value = user.plain_password || '';
                 
                 var modalEl = document.getElementById('editUserModal');
                 var editModal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
