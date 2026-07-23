@@ -21,18 +21,18 @@ function sendEmail($to, $subject, $body) {
         $mail->isSMTP();
         $mail->Host       = 'smtp.gmail.com';
         $mail->SMTPAuth   = true;
-        // SMTP credentials provided by the user
-        $mail->Username   = 'sudduhashmi7866@gmail.com'; 
-        $mail->Password   = 'nwxw tpbw hhdz bzjx';
+        // SMTP credentials
+        $mail->Username   = 'buildupproperty07@gmail.com'; 
+        $mail->Password   = 'adwq ogfg jxjr pxud';
         $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
         $mail->Port       = 587;
 
         // Recipients
-        $mail->setFrom('sudduhashmi7866@gmail.com', 'CRM Leads Admin');
+        $mail->setFrom('buildupproperty07@gmail.com', 'CRM Leads Admin');
         $mail->addAddress($to);
         
         // Add Admin as BCC so they always get a copy
-        $mail->addBCC('sudduhashmi7866@gmail.com', 'Admin Notification');
+        $mail->addBCC('buildupproperty07@gmail.com', 'Admin Notification');
 
         // Content
         $mail->isHTML(true);
