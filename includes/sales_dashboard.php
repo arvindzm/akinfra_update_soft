@@ -167,8 +167,8 @@ if (count($lost_counts) == 0) {
     <div class="col-md-3">
         <div class="metric-card bg-gradient-primary">
             <div class="metric-info">
-                <h6>Pipeline Value</h6>
-                <h3>₹<?php echo number_format($pipeline_value, 2); ?></h3>
+                <h6 class="text-white">Pipeline Value</h6>
+                <h3 class="text-white">₹<?php echo number_format($pipeline_value, 2); ?></h3>
             </div>
             <div class="metric-icon">
                 <i class="fa-solid fa-indian-rupee-sign"></i>
@@ -178,8 +178,8 @@ if (count($lost_counts) == 0) {
     <div class="col-md-3">
         <div class="metric-card bg-gradient-success">
             <div class="metric-info">
-                <h6>Converted Leads</h6>
-                <h2><?php echo $converted_leads_count; ?></h2>
+                <h6 class="text-white">Converted Leads</h6>
+                <h2 class="text-white"><?php echo $converted_leads_count; ?></h2>
             </div>
             <div class="metric-icon">
                 <i class="fa-solid fa-trophy"></i>
@@ -189,8 +189,8 @@ if (count($lost_counts) == 0) {
     <div class="col-md-3">
         <div class="metric-card bg-gradient-success" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
             <div class="metric-info">
-                <h6>Won Revenue</h6>
-                <h3>₹<?php echo number_format($won_revenue, 2); ?></h3>
+                <h6 class="text-white">Won Revenue</h6>
+                <h3 class="text-white">₹<?php echo number_format($won_revenue, 2); ?></h3>
             </div>
             <div class="metric-icon">
                 <i class="fa-solid fa-wallet"></i>

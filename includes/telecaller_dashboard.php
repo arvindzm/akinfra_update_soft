@@ -69,10 +69,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     $sales_id = !empty($_POST['salesperson_id']) ? $_POST['salesperson_id'] : null;
     $note = trim($_POST['note']);
 
-    // If status is 'Assigned to Sales', ensure a salesperson is selected
+    // If status is 'Assigned to Sales', ensure a salesperson is assigned (manual choice or auto-assigned round-robin)
     if ($status === 'Assigned to Sales' && !$sales_id) {
-        $error = "Please select a salesperson when assigning to sales.";
-    } else {
+        if (count($sales_team) > 0) {
+            $s_ids = array_column($sales_team, 'id');
+            $s_placeholders = str_repeat('?,', count($s_ids) - 1) . '?';
+            $s_stmt = $pdo->prepare("SELECT u.id FROM users u LEFT JOIN leads l ON u.id = l.salesperson_id WHERE u.id IN ($s_placeholders) GROUP BY u.id ORDER BY MAX(l.updated_at) ASC LIMIT 1");
+            $s_stmt->execute($s_ids);
+            $auto_sales = $s_stmt->fetch();
+            $sales_id = $auto_sales ? $auto_sales['id'] : $sales_team[0]['id'];
+        } else {
+            $error = "No salespersons available in Team Management. Please add a team member with role 'Sales' first.";
+        }
+    }
+
+    if (!isset($error)) {
         $follow_up_at = !empty($_POST['follow_up_at']) ? $_POST['follow_up_at'] : null;
         $update_stmt = $pdo->prepare("UPDATE leads SET status = ?, salesperson_id = ?, follow_up_at = ? WHERE id = ? AND telecaller_id = ?");
         $update_stmt->execute([$status, $sales_id, $follow_up_at, $lead_id, $user_id]);
@@ -381,14 +392,20 @@ $upcoming_callbacks = $upcoming_callbacks_stmt->fetchAll();
 
                                     <div class="mb-3 sales-dropdown" id="sales-dropdown-<?php echo $lead['id']; ?>" style="display: <?php echo $lead['status'] == 'Assigned to Sales' ? 'block' : 'none'; ?>">
                                         <label class="form-label text-muted fw-semibold">Forward to Salesperson</label>
-                                        <select name="salesperson_id" class="form-select">
-                                            <option value="">Select Salesperson...</option>
-                                            <?php foreach($sales_team as $sales): ?>
-                                                <option value="<?php echo $sales['id']; ?>" <?php echo $lead['salesperson_id'] == $sales['id'] ? 'selected' : ''; ?>>
-                                                    <?php echo htmlspecialchars($sales['name']); ?>
-                                                </option>
-                                            <?php endforeach; ?>
-                                        </select>
+                                        <?php if(count($sales_team) == 0): ?>
+                                            <div class="alert alert-warning p-2 small mb-0">
+                                                <i class="fa-solid fa-triangle-exclamation me-1"></i> No salespersons found in Team Management. Please add a user with role 'Sales' first.
+                                            </div>
+                                        <?php else: ?>
+                                            <select name="salesperson_id" class="form-select">
+                                                <option value="">Auto Assign to Sales</option>
+                                                <?php foreach($sales_team as $sales): ?>
+                                                    <option value="<?php echo $sales['id']; ?>" <?php echo ($lead['salesperson_id'] == $sales['id'] || count($sales_team) == 1) ? 'selected' : ''; ?>>
+                                                        <?php echo htmlspecialchars($sales['name']); ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        <?php endif; ?>
                                     </div>
 
                                     <div class="mb-3">

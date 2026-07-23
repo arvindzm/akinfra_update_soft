@@ -49,9 +49,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     $sales_id = !empty($_POST['salesperson_id']) ? $_POST['salesperson_id'] : null;
     $note = trim($_POST['note']);
 
+    // If status is 'Assigned to Sales', ensure a salesperson is assigned (manual choice or auto-assigned round-robin)
     if ($status === 'Assigned to Sales' && !$sales_id) {
-        $error = "Please select a salesperson when assigning to sales.";
-    } else {
+        if (count($sales_team) > 0) {
+            $s_ids = array_column($sales_team, 'id');
+            $s_placeholders = str_repeat('?,', count($s_ids) - 1) . '?';
+            $s_stmt = $pdo->prepare("SELECT u.id FROM users u LEFT JOIN leads l ON u.id = l.salesperson_id WHERE u.id IN ($s_placeholders) GROUP BY u.id ORDER BY MAX(l.updated_at) ASC LIMIT 1");
+            $s_stmt->execute($s_ids);
+            $auto_sales = $s_stmt->fetch();
+            $sales_id = $auto_sales ? $auto_sales['id'] : $sales_team[0]['id'];
+        } else {
+            $error = "No salespersons available in Team Management. Please add a team member with role 'Sales' first.";
+        }
+    }
+
+    if (!isset($error)) {
         try {
             $follow_up_at = !empty($_POST['follow_up_at']) ? $_POST['follow_up_at'] : null;
             $update_stmt = $pdo->prepare("UPDATE leads SET status = ?, salesperson_id = ?, follow_up_at = ? WHERE id = ? AND telecaller_id = ?");
@@ -114,10 +126,32 @@ if ($role === 'telecaller') {
 }
 
 if ($search !== '') {
-    $query .= " AND (l.name LIKE ? OR l.phone LIKE ? OR l.email LIKE ?)";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
+    $search_param = "%" . $search . "%";
+    $terms = array_filter(explode(' ', $search));
+    
+    $search_conditions = [];
+    
+    if ($role === 'telecaller') {
+        $search_conditions[] = "(l.name LIKE ? OR l.source LIKE ? OR l.phone LIKE ? OR l.email LIKE ? OR s.name LIKE ?)";
+        for ($i = 0; $i < 5; $i++) $params[] = $search_param;
+        
+        foreach ($terms as $term) {
+            $term_param = "%" . $term . "%";
+            $search_conditions[] = "(l.name LIKE ? OR l.source LIKE ? OR l.phone LIKE ? OR l.email LIKE ? OR s.name LIKE ?)";
+            for ($i = 0; $i < 5; $i++) $params[] = $term_param;
+        }
+    } else {
+        $search_conditions[] = "(l.name LIKE ? OR l.source LIKE ? OR l.phone LIKE ? OR l.email LIKE ? OR t.name LIKE ?)";
+        for ($i = 0; $i < 5; $i++) $params[] = $search_param;
+        
+        foreach ($terms as $term) {
+            $term_param = "%" . $term . "%";
+            $search_conditions[] = "(l.name LIKE ? OR l.source LIKE ? OR l.phone LIKE ? OR l.email LIKE ? OR t.name LIKE ?)";
+            for ($i = 0; $i < 5; $i++) $params[] = $term_param;
+        }
+    }
+    
+    $query .= " AND (" . implode(" OR ", $search_conditions) . ")";
 }
 
 if ($status_filter !== '') {
@@ -137,7 +171,7 @@ $leads = $stmt->fetchAll();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Leads | CRM Leads</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
+    <link rel="icon" type="image/png" href="assets/images/logo-light.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -154,7 +188,7 @@ $leads = $stmt->fetchAll();
     <!-- Sidebar -->
     <nav id="sidebar">
         <div class="sidebar-header">
-            <i class="fa-solid fa-chart-line text-primary"></i>
+            <img src="assets/images/logo-light.png" alt="" style="width:40%; filter: brightness(0) invert(1);">
             <span>CRM Leads</span>
         </div>
         <ul class="list-unstyled components">
@@ -353,16 +387,22 @@ $leads = $stmt->fetchAll();
                                                 </div>
 
                                                 <div class="mb-3 sales-dropdown" id="sales-dropdown-<?php echo $lead['id']; ?>" style="display: <?php echo $lead['status'] == 'Assigned to Sales' ? 'block' : 'none'; ?>">
-                                                    <label class="form-label text-muted fw-semibold">Forward to Salesperson</label>
-                                                    <select name="salesperson_id" class="form-select">
-                                                        <option value="">Select Salesperson...</option>
-                                                        <?php foreach($sales_team as $sales): ?>
-                                                            <option value="<?php echo $sales['id']; ?>" <?php echo $lead['salesperson_id'] == $sales['id'] ? 'selected' : ''; ?>>
-                                                                <?php echo htmlspecialchars($sales['name']); ?>
-                                                            </option>
-                                                        <?php endforeach; ?>
-                                                    </select>
-                                                </div>
+                                                     <label class="form-label text-muted fw-semibold">Forward to Salesperson</label>
+                                                     <?php if(count($sales_team) == 0): ?>
+                                                         <div class="alert alert-warning p-2 small mb-0">
+                                                             <i class="fa-solid fa-triangle-exclamation me-1"></i> No salespersons found in Team Management. Please add a user with role 'Sales' first.
+                                                         </div>
+                                                     <?php else: ?>
+                                                         <select name="salesperson_id" class="form-select">
+                                                             <option value="">Auto Assign to Sales</option>
+                                                             <?php foreach($sales_team as $sales): ?>
+                                                                 <option value="<?php echo $sales['id']; ?>" <?php echo ($lead['salesperson_id'] == $sales['id'] || count($sales_team) == 1) ? 'selected' : ''; ?>>
+                                                                     <?php echo htmlspecialchars($sales['name']); ?>
+                                                                 </option>
+                                                             <?php endforeach; ?>
+                                                         </select>
+                                                     <?php endif; ?>
+                                                 </div>
                                                 
                                                 <div class="mb-3">
                                                     <label class="form-label text-muted fw-semibold">Follow-up Date & Time (Optional)</label>

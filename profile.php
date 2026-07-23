@@ -77,7 +77,7 @@ $role = $user['role'];
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Profile | CRM Leads</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
+    <link rel="icon" type="image/png" href="assets/images/logo-light.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -89,7 +89,7 @@ $role = $user['role'];
     <!-- Sidebar -->
     <nav id="sidebar">
         <div class="sidebar-header">
-            <i class="fa-solid fa-chart-line text-primary"></i>
+            <img src="assets/images/logo-light.png" alt="" style="width:40%; filter: brightness(0) invert(1);">
             <span>CRM Leads</span>
         </div>
         <ul class="list-unstyled components">

@@ -210,8 +210,8 @@ $activities = $pdo->query("
     <div class="col-md-3">
         <div class="card h-100">
             <div class="card-body">
-                <h5 class="card-title mb-4">Leads by Status</h5>
-                <div style="position: relative; height: 250px; width: 100%;">
+                <h5 class="card-title mb-3">Leads by Status</h5>
+                <div style="position: relative; height: 330px; width: 100%;">
                     <canvas id="leadsStatusChart"></canvas>
                 </div>
             </div>
@@ -220,8 +220,8 @@ $activities = $pdo->query("
     <div class="col-md-3">
         <div class="card h-100">
             <div class="card-body">
-                <h5 class="card-title mb-4">Leads by Source</h5>
-                <div style="position: relative; height: 250px; width: 100%;">
+                <h5 class="card-title mb-3">Leads by Source</h5>
+                <div style="position: relative; height: 330px; width: 100%;">
                     <canvas id="leadsSourceChart"></canvas>
                 </div>
             </div>
@@ -488,9 +488,17 @@ document.addEventListener("DOMContentLoaded", function() {
         },
         options: {
             responsive: true,
-            cutout: '75%',
+            maintainAspectRatio: false,
+            cutout: '68%',
             plugins: {
-                legend: { position: 'bottom' }
+                legend: {
+                    position: 'bottom',
+                    labels: {
+                        boxWidth: 12,
+                        padding: 6,
+                        font: { size: 11 }
+                    }
+                }
             }
         }
     });
@@ -504,16 +512,54 @@ document.addEventListener("DOMContentLoaded", function() {
                 labels: <?php echo json_encode($source_labels); ?>,
                 datasets: [{
                     data: <?php echo json_encode($source_counts); ?>,
-                    backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6'],
+                    backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#6366f1', '#a855f7'],
                     borderWidth: 0
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                cutout: '75%',
+                cutout: '68%',
                 plugins: {
-                    legend: { position: 'bottom' }
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            boxWidth: 12,
+                            padding: 6,
+                            font: { size: 11 },
+                            generateLabels: function(chart) {
+                                const data = chart.data;
+                                if (data.labels.length && data.datasets.length) {
+                                    return data.labels.map(function(label, i) {
+                                        const meta = chart.getDatasetMeta(0);
+                                        const style = meta.controller.getStyle(i);
+                                        let displayLabel = label || '';
+                                        if (displayLabel.length > 22) {
+                                            displayLabel = displayLabel.substring(0, 20) + '...';
+                                        }
+                                        return {
+                                            text: displayLabel,
+                                            fillStyle: style.backgroundColor,
+                                            strokeStyle: style.borderColor,
+                                            lineWidth: style.borderWidth,
+                                            hidden: isNaN(data.datasets[0].data[i]) || (meta.data[i] && meta.data[i].hidden),
+                                            index: i
+                                        };
+                                    });
+                                }
+                                return [];
+                            }
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.label || '';
+                                let value = context.parsed || 0;
+                                return label + ': ' + value;
+                            }
+                        }
+                    }
                 }
             }
         });

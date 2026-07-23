@@ -254,9 +254,14 @@ body.sidebar-mini #sidebar ul li a i {
 .bg-gradient-warning { background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%) !important; border: none; color: #fff; }
 .bg-gradient-danger { background: linear-gradient(135deg, #ef4444 0%, #f87171 100%) !important; border: none; color: #fff; }
 
+.metric-card[class*="bg-gradient-"] h1,
+.metric-card[class*="bg-gradient-"] h2,
+.metric-card[class*="bg-gradient-"] h3,
+.metric-card[class*="bg-gradient-"] h4,
+.metric-card[class*="bg-gradient-"] h5,
 .metric-card[class*="bg-gradient-"] h6,
-.metric-card[class*="bg-gradient-"] h2 {
-    color: #ffffff;
+.metric-card[class*="bg-gradient-"] .metric-info * {
+    color: #ffffff !important;
 }
 
 .metric-card[class*="bg-gradient-"] .metric-icon {

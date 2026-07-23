@@ -103,15 +103,52 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     }
 }
 
-// Handle User Deletion
-if (isset($_GET['delete'])) {
-    $delete_id = $_GET['delete'];
-    if($delete_id != $_SESSION['user_id']) { // Prevent deleting self
-        $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
-        $stmt->execute([$delete_id]);
-        $success = "User deleted successfully!";
+// Handle Manual Lead Redistribution for Unassigned Leads
+if (isset($_GET['redistribute_unassigned'])) {
+    $res = redistributeTelecallerLeads($pdo, null);
+    if ($res['reassigned'] > 0) {
+        $success = "Successfully redistributed {$res['reassigned']} unassigned lead(s) among {$res['telecallers_count']} active telecaller(s)!";
+    } else {
+        if ($res['telecallers_count'] == 0) {
+            $error = "No active telecallers available to assign leads to.";
+        } else {
+            $info_msg = "No unassigned leads found. All leads are currently assigned.";
+        }
     }
 }
+
+// Handle User Deletion
+if (isset($_GET['delete'])) {
+    $delete_id = (int)$_GET['delete'];
+    if ($delete_id != $_SESSION['user_id']) { // Prevent deleting self
+        // Fetch user details to check role
+        $u_stmt = $pdo->prepare("SELECT name, role FROM users WHERE id = ?");
+        $u_stmt->execute([$delete_id]);
+        $target_user = $u_stmt->fetch();
+
+        if ($target_user) {
+            $redistribute_info = "";
+            if ($target_user['role'] === 'telecaller') {
+                // Automatically redistribute their leads to remaining telecallers
+                $res = redistributeTelecallerLeads($pdo, $delete_id);
+                if ($res['reassigned'] > 0) {
+                    $redistribute_info = " and {$res['reassigned']} assigned lead(s) were redistributed among {$res['telecallers_count']} active telecaller(s)";
+                } else if ($res['telecallers_count'] == 0) {
+                    $redistribute_info = " (Note: No other active telecallers were left, so leads remain unassigned)";
+                }
+            }
+
+            $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
+            $stmt->execute([$delete_id]);
+            $success = "User '" . htmlspecialchars($target_user['name']) . "' deleted successfully{$redistribute_info}!";
+        }
+    } else {
+        $error = "You cannot delete your own account.";
+    }
+}
+
+// Fetch count of unassigned leads
+$unassigned_leads_count = $pdo->query("SELECT COUNT(*) FROM leads WHERE telecaller_id IS NULL OR telecaller_id NOT IN (SELECT id FROM users WHERE role = 'telecaller')")->fetchColumn();
 
 // Fetch all users
 $stmt = $pdo->query("SELECT id, name, email, phone, designation, profile_image, role, created_at FROM users ORDER BY created_at DESC");
@@ -123,7 +160,7 @@ $users = $stmt->fetchAll();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Team | CRM Leads</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
+    <link rel="icon" type="image/png" href="assets/images/logo-light.png">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -139,7 +176,7 @@ $users = $stmt->fetchAll();
     <!-- Sidebar -->
     <nav id="sidebar">
         <div class="sidebar-header">
-            <i class="fa-solid fa-chart-line text-primary"></i>
+            <img src="assets/images/logo-light.png" alt="" style="width:40%; filter: brightness(0) invert(1);">
             <span>CRM Leads</span>
         </div>
         <ul class="list-unstyled components">
@@ -190,6 +227,9 @@ $users = $stmt->fetchAll();
             <?php if(isset($success)): ?>
                 <div class="alert alert-success"><i class="fa-solid fa-circle-check me-2"></i><?php echo $success; ?></div>
             <?php endif; ?>
+            <?php if(isset($info_msg)): ?>
+                <div class="alert alert-info"><i class="fa-solid fa-circle-info me-2"></i><?php echo $info_msg; ?></div>
+            <?php endif; ?>
             <?php if(isset($error)): ?>
                 <div class="alert alert-danger"><i class="fa-solid fa-circle-exclamation me-2"></i><?php echo $error; ?></div>
             <?php endif; ?>
@@ -197,10 +237,18 @@ $users = $stmt->fetchAll();
             <div class="table-card">
                 <div class="table-header d-flex flex-column flex-sm-row justify-content-between align-items-start align-items-sm-center gap-3">
                     <h5 class="mb-0">All Users Directory</h5>
-                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
-                        <i class="fa-solid fa-plus me-2"></i>Add New User
-                    </button>
+                    <div class="d-flex gap-2">
+                        <?php if($unassigned_leads_count > 0): ?>
+                        <a href="users.php?redistribute_unassigned=1" class="btn btn-warning shadow-sm" onclick="return confirm('Distribute <?php echo $unassigned_leads_count; ?> unassigned lead(s) equally among all active telecallers?');">
+                            <i class="fa-solid fa-arrows-rotate me-2"></i>Redistribute Unassigned Leads (<?php echo $unassigned_leads_count; ?>)
+                        </a>
+                        <?php endif; ?>
+                        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
+                            <i class="fa-solid fa-plus me-2"></i>Add New User
+                        </button>
+                    </div>
                 </div>
+
                 <div class="table-responsive">
                     <table class="table table-hover align-middle">
                         <thead>
