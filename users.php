@@ -286,9 +286,12 @@ $users = $stmt->fetchAll();
                                 <td>
                                     <div class="d-flex align-items-center gap-2">
                                         <span class="password-mask font-monospace small" id="pass_mask_<?php echo $user['id']; ?>">••••••••</span>
-                                        <span class="password-real font-monospace small d-none text-primary fw-bold" id="pass_real_<?php echo $user['id']; ?>"><?php echo htmlspecialchars($user['plain_password'] ?? 'N/A'); ?></span>
+                                        <span class="password-real font-monospace small d-none text-primary fw-bold" id="pass_real_<?php echo $user['id']; ?>"><?php echo htmlspecialchars($user['plain_password'] ?? ''); ?></span>
                                         <button type="button" class="btn btn-sm btn-light p-1 border-0" onclick="toggleRowPassword(<?php echo $user['id']; ?>)" title="View Password">
                                             <i class="fa-regular fa-eye text-muted" id="pass_icon_<?php echo $user['id']; ?>"></i>
+                                        </button>
+                                        <button type="button" class="btn btn-sm btn-light p-1 border-0" onclick="copyUserPassword('<?php echo htmlspecialchars(addslashes($user['plain_password'] ?? '')); ?>', this)" title="Copy Password">
+                                            <i class="fa-regular fa-copy text-muted"></i>
                                         </button>
                                     </div>
                                 </td>
@@ -503,6 +506,17 @@ $users = $stmt->fetchAll();
                 icon.classList.remove('fa-eye-slash');
                 icon.classList.add('fa-eye');
             }
+        }
+
+        function copyUserPassword(pass, btn) {
+            if (!pass) return;
+            navigator.clipboard.writeText(pass).then(() => {
+                const origIcon = btn.innerHTML;
+                btn.innerHTML = '<i class="fa-solid fa-check text-success"></i>';
+                setTimeout(() => { btn.innerHTML = origIcon; }, 2000);
+            }).catch(err => {
+                alert("Password: " + pass);
+            });
         }
 
         function openEditUserModal(btn) {

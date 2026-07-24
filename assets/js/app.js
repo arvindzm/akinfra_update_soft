@@ -46,14 +46,21 @@ $(document).ready(function() {
                     html = '<div class="list-group list-group-flush">';
                     notes.forEach(function(note) {
                         var date = new Date(note.created_at).toLocaleString();
-                        var badge = note.role === 'admin' ? 'bg-danger' : (note.role === 'telecaller' ? 'bg-info' : 'bg-success');
+                        var roleBadge = '';
+                        if (note.role === 'admin') {
+                            roleBadge = '<span class="badge bg-danger ms-1" style="font-size: 10px;"><i class="fa-solid fa-crown me-1 text-warning"></i>Admin Instruction</span>';
+                        } else if (note.role === 'telecaller') {
+                            roleBadge = '<span class="badge ms-1" style="font-size: 10px; background-color: #7c3aed; color: #fff;"><i class="fa-solid fa-headset me-1"></i>Telecaller</span>';
+                        } else {
+                            roleBadge = '<span class="badge bg-success ms-1" style="font-size: 10px;"><i class="fa-solid fa-briefcase me-1"></i>Sales</span>';
+                        }
                         
                         html += '<div class="list-group-item px-0 py-3 border-bottom">';
                         html += '<div class="d-flex justify-content-between mb-1">';
-                        html += '<small class="fw-semibold">' + (note.user_name || 'User') + ' <span class="badge ' + badge + ' ms-1" style="font-size: 10px;">' + note.role + '</span></small>';
+                        html += '<small class="fw-semibold">' + (note.user_name || 'User') + roleBadge + '</small>';
                         html += '<small class="text-muted" style="font-size: 11px;">' + date + '</small>';
                         html += '</div>';
-                        html += '<p class="mb-0 text-muted small">' + note.note + '</p>';
+                        html += '<p class="mb-0 text-dark small" style="white-space: pre-wrap;">' + note.note + '</p>';
                         html += '</div>';
                     });
                     html += '</div>';

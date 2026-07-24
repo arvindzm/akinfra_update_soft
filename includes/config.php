@@ -2,7 +2,7 @@
 session_start();
 
 $db_host = '127.0.0.1';
-$db_port = '3307';
+$db_port = '3306';
 $db_user = 'root';
 $db_pass = ''; // Default XAMPP password is empty
 $db_name = 'crmleads';
@@ -34,10 +34,7 @@ function redirect($url) {
 
 /**
  * Redistribute leads assigned to a specific telecaller or all unassigned leads.
- *
- * @param PDO $pdo
- * @param int|null $deleted_telecaller_id If set, redistributes leads belonging to this telecaller. If null, redistributes all unassigned/orphaned leads.
- * @return array ['reassigned' => int, 'telecallers_count' => int]
+ * NOTE: Leads with activity (status != 'New' OR having notes) are PROTECTED and will NOT be reassigned.
  */
 function redistributeTelecallerLeads($pdo, $deleted_telecaller_id = null) {
     // 1. Fetch active telecallers
@@ -50,12 +47,24 @@ function redistributeTelecallerLeads($pdo, $deleted_telecaller_id = null) {
     $telecallers = $t_stmt->fetchAll(PDO::FETCH_COLUMN);
     $telecaller_count = count($telecallers);
 
-    // 2. Fetch target leads
+    // 2. Fetch target leads (ONLY status = 'New' AND no notes - PROTECT active leads)
     if ($deleted_telecaller_id !== null) {
-        $l_stmt = $pdo->prepare("SELECT id FROM leads WHERE telecaller_id = ? ORDER BY id ASC");
+        $l_stmt = $pdo->prepare("
+            SELECT id FROM leads 
+            WHERE telecaller_id = ? 
+              AND status = 'New' 
+              AND id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)
+            ORDER BY id ASC
+        ");
         $l_stmt->execute([$deleted_telecaller_id]);
     } else {
-        $l_stmt = $pdo->query("SELECT id FROM leads WHERE telecaller_id IS NULL OR telecaller_id NOT IN (SELECT id FROM users WHERE role = 'telecaller') ORDER BY id ASC");
+        $l_stmt = $pdo->query("
+            SELECT id FROM leads 
+            WHERE (telecaller_id IS NULL OR telecaller_id NOT IN (SELECT id FROM users WHERE role = 'telecaller'))
+              AND status = 'New' 
+              AND id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)
+            ORDER BY id ASC
+        ");
     }
     $leads = $l_stmt->fetchAll(PDO::FETCH_COLUMN);
     $leads_count = count($leads);
@@ -66,7 +75,7 @@ function redistributeTelecallerLeads($pdo, $deleted_telecaller_id = null) {
 
     if ($telecaller_count === 0) {
         if ($deleted_telecaller_id !== null) {
-            $u_stmt = $pdo->prepare("UPDATE leads SET telecaller_id = NULL WHERE telecaller_id = ?");
+            $u_stmt = $pdo->prepare("UPDATE leads SET telecaller_id = NULL WHERE telecaller_id = ? AND status = 'New'");
             $u_stmt->execute([$deleted_telecaller_id]);
         }
         return ['reassigned' => 0, 'telecallers_count' => 0];
@@ -142,12 +151,17 @@ function normalizeProjectName(string $raw): string {
 }
 
 /**
- * Automatically categorize all existing leads by project (from project or source column)
- * and assign them round-robin to the assigned team members for that project.
+ * Automatically categorize leads by project and assign them round-robin to team members.
+ * NOTE: Leads with activity (status != 'New' OR having notes) are PROTECTED and will NOT be reassigned.
  */
 function autoAssignAllLeadsByProject($pdo) {
-    // 1. Fetch all leads
-    $stmt = $pdo->query("SELECT id, source, project FROM leads ORDER BY id ASC");
+    // 1. Fetch leads where status = 'New' AND no notes added (PROTECT active leads)
+    $stmt = $pdo->query("
+        SELECT id, source, project, telecaller_id 
+        FROM leads 
+        WHERE status = 'New' AND id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)
+        ORDER BY id ASC
+    ");
     $leads = $stmt->fetchAll();
 
     if (count($leads) === 0) {
@@ -159,6 +173,7 @@ function autoAssignAllLeadsByProject($pdo) {
         SELECT pa.project_name, pa.user_id 
         FROM project_assignments pa
         JOIN users u ON u.id = pa.user_id
+        WHERE u.role = 'telecaller'
         ORDER BY pa.project_name, pa.user_id ASC
     ")->fetchAll();
 
@@ -168,11 +183,9 @@ function autoAssignAllLeadsByProject($pdo) {
     }
 
     // Pre-fetch all active telecallers / sales for fallback
-    $all_users = $pdo->query("SELECT id FROM users WHERE role IN ('telecaller','sales') ORDER BY id ASC")->fetchAll(PDO::FETCH_COLUMN);
+    $all_users = $pdo->query("SELECT id FROM users WHERE role = 'telecaller' ORDER BY id ASC")->fetchAll(PDO::FETCH_COLUMN);
 
-    // Keep track of round-robin counters per project
     $counters = [];
-
     $update_stmt = $pdo->prepare("UPDATE leads SET project = ?, telecaller_id = ? WHERE id = ?");
     $processed_count = 0;
 
@@ -203,5 +216,120 @@ function autoAssignAllLeadsByProject($pdo) {
 
     return $processed_count;
 }
+
+/**
+ * 24-HOUR INACTIVITY AUTO-REASSIGNMENT ENGINE
+ * Automatically reassigns leads that have been assigned for 24+ hours
+ * with ZERO activity/notes and status = 'New' to another active telecaller.
+ */
+function checkAndReassignInactiveLeads24H($pdo) {
+    try {
+        // Cutoff: 24 hours ago
+        $cutoff = date('Y-m-d H:i:s', strtotime('-24 hours'));
+        
+        // Fetch leads that are untouched for 24h
+        $query = "
+            SELECT l.id, l.project, l.source, l.telecaller_id, l.name as lead_name
+            FROM leads l
+            WHERE l.status = 'New'
+              AND l.telecaller_id IS NOT NULL
+              AND l.created_at <= ?
+              AND l.id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)
+            ORDER BY l.created_at ASC
+        ";
+        
+        $stmt = $pdo->prepare($query);
+        $stmt->execute([$cutoff]);
+        $inactive_leads = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (count($inactive_leads) === 0) {
+            return 0;
+        }
+
+        // Fetch project teams
+        $pa_rows = $pdo->query("
+            SELECT pa.project_name, pa.user_id 
+            FROM project_assignments pa
+            JOIN users u ON u.id = pa.user_id
+            WHERE u.role = 'telecaller'
+            ORDER BY pa.project_name, pa.user_id ASC
+        ")->fetchAll(PDO::FETCH_ASSOC);
+
+        $project_teams = [];
+        foreach ($pa_rows as $row) {
+            $project_teams[$row['project_name']][] = (int)$row['user_id'];
+        }
+
+        $all_telecallers = $pdo->query("SELECT id FROM users WHERE role = 'telecaller' ORDER BY id ASC")->fetchAll(PDO::FETCH_COLUMN);
+
+        if (count($all_telecallers) === 0) {
+            return 0;
+        }
+
+        $reassigned_count = 0;
+        $update_stmt = $pdo->prepare("UPDATE leads SET telecaller_id = ?, updated_at = NOW() WHERE id = ?");
+        $note_stmt = $pdo->prepare("INSERT INTO lead_notes (lead_id, user_id, note, created_at) VALUES (?, ?, ?, NOW())");
+
+        foreach ($inactive_leads as $lead) {
+            $old_telecaller_id = $lead['telecaller_id'];
+            $raw_project = !empty($lead['project']) ? $lead['project'] : $lead['source'];
+            $canonical_project = normalizeProjectName($raw_project);
+
+            // Candidate telecallers excluding current inactive telecaller
+            $candidate_telecallers = [];
+            if (!empty($canonical_project) && isset($project_teams[$canonical_project])) {
+                $candidate_telecallers = array_values(array_filter($project_teams[$canonical_project], function($tid) use ($old_telecaller_id) {
+                    return $tid != $old_telecaller_id;
+                }));
+            }
+
+            if (count($candidate_telecallers) === 0) {
+                $candidate_telecallers = array_values(array_filter($all_telecallers, function($tid) use ($old_telecaller_id) {
+                    return $tid != $old_telecaller_id;
+                }));
+            }
+
+            if (count($candidate_telecallers) > 0) {
+                // Select candidate with least recent assignment
+                $placeholders = str_repeat('?,', count($candidate_telecallers) - 1) . '?';
+                $sel_stmt = $pdo->prepare("
+                    SELECT u.id 
+                    FROM users u 
+                    LEFT JOIN leads l ON u.id = l.telecaller_id 
+                    WHERE u.id IN ($placeholders) 
+                    GROUP BY u.id 
+                    ORDER BY MAX(l.created_at) ASC 
+                    LIMIT 1
+                ");
+                $sel_stmt->execute($candidate_telecallers);
+                $new_telecaller_id = $sel_stmt->fetchColumn();
+
+                if (!$new_telecaller_id) {
+                    $new_telecaller_id = $candidate_telecallers[0];
+                }
+
+                // Execute Reassignment
+                $update_stmt->execute([$new_telecaller_id, $lead['id']]);
+                
+                // Log automated note
+                $note_msg = "⏰ Auto-Reassigned (24h Inactivity): Lead was untouched for 24+ hours by previous telecaller and has been reassigned to keep workflow active.";
+                $note_stmt->execute([$lead['id'], $new_telecaller_id, $note_msg]);
+
+                // Send instant notification trigger to new telecaller
+                require_once __DIR__ . '/mailer.php';
+                sendNewLeadNotification($pdo, $lead['id'], $new_telecaller_id);
+
+                $reassigned_count++;
+            }
+        }
+
+        return $reassigned_count;
+    } catch (PDOException $e) {
+        return 0;
+    }
+}
+
+// Automatically trigger 24-hour inactivity check on inclusion
+checkAndReassignInactiveLeads24H($pdo);
 ?>
 

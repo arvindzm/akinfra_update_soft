@@ -266,6 +266,12 @@ try {
 
     $lead_id = $pdo->lastInsertId();
 
+    // Trigger instant Email & WhatsApp notification to assigned telecaller
+    require_once __DIR__ . '/../includes/mailer.php';
+    if ($assigned_user_id) {
+        sendNewLeadNotification($pdo, $lead_id, $assigned_user_id);
+    }
+
     http_response_code(201);
     echo json_encode([
         'status'           => 'success',

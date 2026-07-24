@@ -23,10 +23,18 @@ INSERT INTO `users` (`name`, `email`, `password`, `role`) VALUES
 CREATE TABLE `leads` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `source` varchar(50) NOT NULL DEFAULT 'manual', -- meta, google, manual
+  `project` varchar(100) DEFAULT NULL,
   `name` varchar(100) NOT NULL,
   `email` varchar(100) DEFAULT NULL,
   `phone` varchar(20) NOT NULL,
-  `status` enum('New','In Progress','Assigned to Sales','Converted','Dead') NOT NULL DEFAULT 'New',
+  `status` varchar(50) NOT NULL DEFAULT 'New', -- New, In Progress, Follow Up, Site Visit Scheduled, Site Visit Done, Negotiation, Assigned to Sales, Converted, Dead
+  `follow_up_at` datetime DEFAULT NULL,
+  `site_visit_at` datetime DEFAULT NULL,
+  `site_visit_status` enum('None','Scheduled','Completed','Cancelled') DEFAULT 'None',
+  `deal_value` decimal(10,2) DEFAULT NULL,
+  `booking_amount` decimal(10,2) DEFAULT NULL,
+  `unit_number` varchar(100) DEFAULT NULL,
+  `dead_reason` varchar(255) DEFAULT NULL,
   `telecaller_id` int(11) DEFAULT NULL,
   `salesperson_id` int(11) DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,

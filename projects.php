@@ -6,24 +6,107 @@ if (!isLoggedIn() || getUser()['role'] !== 'admin') {
 }
 
 // ---------------------------------------------------------------
-// DEFINED PROJECTS & THEIR TEAM MEMBERS (by name - for display)
+// DYNAMIC PROJECT MAPPINGS (stored in includes/project_mappings.json)
 // ---------------------------------------------------------------
-$defined_projects = [
-    'Vayu Green'           => ['Mansi', 'Mrunal', 'Akshada', 'Arvind', 'Abhay', 'Shiva'],
-    'Vayu Villa Commercial'=> ['Mansi', 'Mrunal', 'Akshada', 'Arvind', 'Abhay', 'Shiva'],
-    'Golden Cryst'         => ['Rishi', 'Samiksha'],
-    'My Home Century'      => ['Rishi', 'Samiksha'],
-    'Green Valley'         => ['Mansi', 'Mrunal', 'Akshada', 'Arvind', 'Abhay', 'Shiva'],
-];
+$mapping_file = __DIR__ . '/includes/project_mappings.json';
+if (file_exists($mapping_file)) {
+    $defined_projects = json_decode(file_get_contents($mapping_file), true) ?: [];
+} else {
+    $defined_projects = [
+        'Vayu Green'           => ['Mansi', 'Mrunal', 'Akshada', 'Arvind', 'Abhay', 'Shiva'],
+        'Vayu Villa Commercial'=> ['Mansi', 'Mrunal', 'Akshada', 'Arvind', 'Abhay', 'Shiva'],
+        'Golden Cryst'         => ['Rishi', 'Samiksha'],
+        'My Home Century'      => ['Rishi', 'Samiksha'],
+        'Green Valley'         => ['Mansi', 'Mrunal', 'Akshada', 'Arvind', 'Abhay', 'Shiva'],
+    ];
+    file_put_contents($mapping_file, json_encode($defined_projects, JSON_PRETTY_PRINT));
+}
 
 $messages = [];
 $errors   = [];
 
+// Helper function to sync JSON mapping to database project_assignments table
+function syncProjectAssignmentsToDB($pdo, $defined_projects) {
+    $all_users = $pdo->query("SELECT id, name FROM users WHERE role IN ('telecaller','sales')")->fetchAll();
+    $name_map  = [];
+    foreach ($all_users as $u) {
+        $name_map[strtolower(trim($u['name']))] = $u['id'];
+    }
+
+    foreach ($defined_projects as $proj => $members) {
+        $pdo->prepare("DELETE FROM project_assignments WHERE project_name = ?")->execute([$proj]);
+        $ins = $pdo->prepare("INSERT IGNORE INTO project_assignments (project_name, user_id) VALUES (?, ?)");
+        foreach ($members as $member_name) {
+            $key = strtolower(trim($member_name));
+            if (isset($name_map[$key])) {
+                $ins->execute([$proj, $name_map[$key]]);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------
-// POST: Save project assignments
+// POST: Save, Add, Remove project assignments
 // ---------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
+    // Action 1: Remove specific member from project
+    if ($_POST['action'] === 'remove_project_member') {
+        $project_name = trim($_POST['project_name'] ?? '');
+        $member_name  = trim($_POST['member_name'] ?? '');
+        if (isset($defined_projects[$project_name])) {
+            $defined_projects[$project_name] = array_values(array_filter($defined_projects[$project_name], function($m) use ($member_name) {
+                return strtolower(trim($m)) !== strtolower(trim($member_name));
+            }));
+            file_put_contents($mapping_file, json_encode($defined_projects, JSON_PRETTY_PRINT));
+            syncProjectAssignmentsToDB($pdo, $defined_projects);
+            $messages[] = "User <strong>" . htmlspecialchars($member_name) . "</strong> has been removed from <strong>" . htmlspecialchars($project_name) . "</strong>!";
+        }
+    }
+
+    // Action 2: Add member to project
+    if ($_POST['action'] === 'add_project_member') {
+        $project_name = trim($_POST['project_name'] ?? '');
+        $member_name  = trim($_POST['member_name'] ?? '');
+        if (!empty($project_name) && !empty($member_name)) {
+            if (!isset($defined_projects[$project_name])) {
+                $defined_projects[$project_name] = [];
+            }
+            if (!in_array($member_name, $defined_projects[$project_name])) {
+                $defined_projects[$project_name][] = $member_name;
+                file_put_contents($mapping_file, json_encode($defined_projects, JSON_PRETTY_PRINT));
+                syncProjectAssignmentsToDB($pdo, $defined_projects);
+                $messages[] = "Added <strong>" . htmlspecialchars($member_name) . "</strong> to <strong>" . htmlspecialchars($project_name) . "</strong>!";
+            }
+        }
+    }
+
+    // Action 3: Add new project
+    if ($_POST['action'] === 'add_new_project') {
+        $new_proj = trim($_POST['new_project_name'] ?? '');
+        if (!empty($new_proj)) {
+            if (!isset($defined_projects[$new_proj])) {
+                $defined_projects[$new_proj] = [];
+                file_put_contents($mapping_file, json_encode($defined_projects, JSON_PRETTY_PRINT));
+                $messages[] = "New project <strong>" . htmlspecialchars($new_proj) . "</strong> added!";
+            } else {
+                $errors[] = "Project <strong>" . htmlspecialchars($new_proj) . "</strong> already exists.";
+            }
+        }
+    }
+
+    // Action 4: Delete project mapping completely
+    if ($_POST['action'] === 'delete_project') {
+        $project_name = trim($_POST['project_name'] ?? '');
+        if (isset($defined_projects[$project_name])) {
+            unset($defined_projects[$project_name]);
+            file_put_contents($mapping_file, json_encode($defined_projects, JSON_PRETTY_PRINT));
+            $pdo->prepare("DELETE FROM project_assignments WHERE project_name = ?")->execute([$project_name]);
+            $messages[] = "Project mapping for <strong>" . htmlspecialchars($project_name) . "</strong> deleted!";
+        }
+    }
+
+    // Action 5: Save assignments from manual checkbox editor
     if ($_POST['action'] === 'save_assignments') {
         $project_name = trim($_POST['project_name'] ?? '');
         $user_ids     = $_POST['user_ids'] ?? [];
@@ -31,43 +114,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (empty($project_name)) {
             $errors[] = "Project name required.";
         } else {
-            // Delete existing assignments for this project
             $del = $pdo->prepare("DELETE FROM project_assignments WHERE project_name = ?");
             $del->execute([$project_name]);
 
-            // Insert new assignments
+            $member_names = [];
             if (!empty($user_ids)) {
                 $ins = $pdo->prepare("INSERT IGNORE INTO project_assignments (project_name, user_id) VALUES (?, ?)");
+                $u_stmt = $pdo->prepare("SELECT name FROM users WHERE id = ?");
                 foreach ($user_ids as $uid) {
                     $ins->execute([$project_name, (int)$uid]);
+                    $u_stmt->execute([(int)$uid]);
+                    $un = $u_stmt->fetchColumn();
+                    if ($un) $member_names[] = $un;
                 }
             }
+            $defined_projects[$project_name] = array_unique($member_names);
+            file_put_contents($mapping_file, json_encode($defined_projects, JSON_PRETTY_PRINT));
             $messages[] = "Assignments saved for <strong>" . htmlspecialchars($project_name) . "</strong>!";
         }
     }
 
     if ($_POST['action'] === 'sync_from_names') {
-        // Sync: Match user names to defined project lists and auto-assign
-        $all_users = $pdo->query("SELECT id, name FROM users WHERE role IN ('telecaller','sales') ORDER BY name")->fetchAll();
-        $name_map  = [];
-        foreach ($all_users as $u) {
-            $name_map[strtolower(trim($u['name']))] = $u['id'];
-        }
-
-        $synced = 0;
-        foreach ($defined_projects as $proj => $members) {
-            // Clear old
-            $pdo->prepare("DELETE FROM project_assignments WHERE project_name = ?")->execute([$proj]);
-            $ins = $pdo->prepare("INSERT IGNORE INTO project_assignments (project_name, user_id) VALUES (?, ?)");
-            foreach ($members as $member_name) {
-                $key = strtolower(trim($member_name));
-                if (isset($name_map[$key])) {
-                    $ins->execute([$proj, $name_map[$key]]);
-                    $synced++;
-                }
-            }
-        }
-        $messages[] = "Auto-sync complete! <strong>$synced</strong> assignment(s) created across all projects.";
+        syncProjectAssignmentsToDB($pdo, $defined_projects);
+        $messages[] = "Auto-sync complete! Assignments updated across all projects.";
     }
 
     if ($_POST['action'] === 'auto_assign_all_leads') {
@@ -124,9 +193,29 @@ sort($all_project_names);
         .member-badge {
             display: inline-flex; align-items: center; gap: 5px;
             background: #f0eeff; color: #5b4fcf;
-            border-radius: 20px; padding: 3px 12px; font-size: 13px; font-weight: 600;
+            border-radius: 20px; padding: 4px 28px 4px 12px; font-size: 13px; font-weight: 600;
+            position: relative;
         }
         .member-badge.unmatched { background: #fff3cd; color: #856404; }
+        .btn-remove-badge {
+            position: absolute;
+            right: 5px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #ef4444;
+            font-size: 12px;
+            padding: 0 4px;
+            line-height: 1;
+            cursor: pointer;
+            border-radius: 50%;
+            transition: background-color 0.15s, color 0.15s;
+        }
+        .btn-remove-badge:hover {
+            background-color: #fee2e2;
+            color: #b91c1c;
+        }
         .user-checkbox-grid { display: flex; flex-wrap: wrap; gap: 10px; }
         .user-checkbox-item { 
             display: flex; align-items: center; gap: 8px;
@@ -194,52 +283,73 @@ sort($all_project_names);
         <?php endforeach; ?>
 
         <!-- Auto-Sync Banner -->
-        <div class="sync-banner p-4 mb-4 d-flex flex-column flex-md-row align-items-start align-items-md-center gap-3">
-            <div class="flex-grow-1">
-                <h5 class="mb-1 fw-bold"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Auto-Sync from Predefined List</h5>
-                <p class="mb-0 opacity-75 small">
-                    Automatically match team members by <strong>name</strong> and assign them to projects.<br>
-                    <span class="opacity-75">Vayu Green, Vayu Villa, Golden Cryst, My Home Century, Green Valley ke liye team already defined hai.</span>
-                </p>
-            </div>
-            <form method="POST" class="d-flex gap-2">
-                <input type="hidden" name="action" value="sync_from_names">
-                <button type="submit" class="btn btn-light fw-semibold px-4" onclick="return confirm('Auto-sync karega aur purani assignments replace karega. Continue?')">
-                    <i class="fa-solid fa-arrows-rotate me-2"></i>Auto-Sync Now
-                </button>
-            </form>
-        </div>
-
-        <!-- Bulk Auto-Assign Existing Leads Banner -->
-        <div class="card border-0 shadow-sm mb-4" style="border-radius:14px; background: linear-gradient(135deg, #10b981, #059669); color: white;">
+        <div class="card border-0 shadow-sm mb-4" style="border-radius: 16px; background: linear-gradient(135deg, #4f46e5, #6366f1); color: #ffffff;">
             <div class="card-body p-4 d-flex flex-column flex-md-row align-items-start align-items-md-center gap-3">
                 <div class="flex-grow-1">
-                    <h5 class="mb-1 fw-bold"><i class="fa-solid fa-bolt me-2"></i>Distribute All 64 Existing Leads to Teams</h5>
-                    <p class="mb-0 opacity-75 small">
-                        Puraani aur abhi tak aayi hui <strong>sabhi 64 leads</strong> ko automatically unke project ke hisaab se unki team members (Mansi, Rishi, Samiksha, etc.) me baant dega.
+                    <h5 class="mb-2 fw-bold text-white" style="color: #ffffff !important; font-size: 1.15rem; letter-spacing: -0.2px;">
+                        <i class="fa-solid fa-wand-magic-sparkles me-2 text-warning"></i>Auto-Sync from Predefined List
+                    </h5>
+                    <p class="mb-1 text-white opacity-90 small" style="color: #f8fafc !important; font-size: 13.5px; line-height: 1.5;">
+                        Automatically match team members by <strong>name</strong> and assign them to projects.
                     </p>
+                    <div class="text-white-50 small" style="color: #e2e8f0 !important; font-size: 12.5px;">
+                        <i class="fa-solid fa-circle-info me-1 text-warning"></i>Vayu Green, Vayu Villa, Golden Cryst, My Home Century, Green Valley ke liye team custom editable hai.
+                    </div>
                 </div>
-                <form method="POST">
-                    <input type="hidden" name="action" value="auto_assign_all_leads">
-                    <button type="submit" class="btn btn-light text-success fw-bold px-4 shadow-sm" onclick="return confirm('Sabhi existing leads ko unke respective project team members mein auto-assign kar dein?')">
-                        <i class="fa-solid fa-rotate me-2"></i>Distribute All Leads Now
+                <form method="POST" class="d-flex gap-2">
+                    <input type="hidden" name="action" value="sync_from_names">
+                    <button type="submit" class="btn btn-light fw-bold px-4 py-2 text-primary shadow-sm" style="border-radius: 10px;" onclick="return confirm('Auto-sync karega aur purani assignments replace karega. Continue?')">
+                        <i class="fa-solid fa-arrows-rotate me-2 text-primary"></i>Auto-Sync Now
                     </button>
                 </form>
             </div>
         </div>
 
-        <!-- Predefined Projects Summary -->
+        <!-- Bulk Auto-Assign Existing Leads Banner -->
+        <div class="card border-0 shadow-sm mb-4" style="border-radius: 16px; background: linear-gradient(135deg, #059669, #10b981); color: #ffffff;">
+            <div class="card-body p-4 d-flex flex-column flex-md-row align-items-start align-items-md-center gap-3">
+                <div class="flex-grow-1">
+                    <h5 class="mb-2 fw-bold text-white" style="color: #ffffff !important; font-size: 1.15rem; letter-spacing: -0.2px;">
+                        <i class="fa-solid fa-bolt me-2 text-warning"></i>Distribute All Existing Leads to Teams
+                    </h5>
+                    <p class="mb-0 text-white opacity-90 small" style="color: #f8fafc !important; font-size: 13.5px; line-height: 1.5;">
+                        Puraani aur abhi tak aayi hui <strong>sabhi leads</strong> ko automatically unke project ke hisaab se unki team members me baant dega.
+                    </p>
+                </div>
+                <form method="POST">
+                    <input type="hidden" name="action" value="auto_assign_all_leads">
+                    <button type="submit" class="btn btn-light text-success fw-bold px-4 py-2 shadow-sm" style="border-radius: 10px;" onclick="return confirm('Sabhi existing leads ko unke respective project team members mein auto-assign kar dein?')">
+                        <i class="fa-solid fa-rotate me-2 text-success"></i>Distribute All Leads Now
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Predefined Projects Summary (Editable) -->
         <div class="card border-0 shadow-sm mb-4" style="border-radius:14px;">
             <div class="card-body p-4">
-                <h5 class="fw-bold mb-3"><i class="fa-solid fa-list-check me-2 text-primary"></i>Predefined Project → Team Mapping</h5>
+                <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                    <h5 class="fw-bold mb-0"><i class="fa-solid fa-list-check me-2 text-primary"></i>Predefined Project → Team Mapping</h5>
+                    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addProjectModal">
+                        <i class="fa-solid fa-plus me-1"></i>Add New Project
+                    </button>
+                </div>
                 <div class="row g-3">
                     <?php foreach ($defined_projects as $proj => $members): ?>
                     <div class="col-lg-6">
                         <div class="p-3 rounded-3" style="background:#f8f9ff;border:1.5px solid #eef0f7;">
-                            <div class="fw-bold mb-2 text-primary"><?php echo htmlspecialchars($proj); ?></div>
-                            <div class="d-flex flex-wrap gap-2">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div class="fw-bold text-primary"><i class="fa-solid fa-building me-1"></i><?php echo htmlspecialchars($proj); ?></div>
+                                <form method="POST" style="display:inline;" onsubmit="return confirm('Delete project <?php echo htmlspecialchars(addslashes($proj)); ?> mapping?');">
+                                    <input type="hidden" name="action" value="delete_project">
+                                    <input type="hidden" name="project_name" value="<?php echo htmlspecialchars($proj); ?>">
+                                    <button type="submit" class="btn btn-sm text-danger p-0 border-0" title="Delete Project Mapping">
+                                        <i class="fa-solid fa-trash-can"></i>
+                                    </button>
+                                </form>
+                            </div>
+                            <div class="d-flex flex-wrap gap-2 mb-3">
                                 <?php foreach ($members as $m): 
-                                    // Check if this name exists in DB
                                     $found = false;
                                     foreach ($all_users as $u) {
                                         if (strtolower(trim($u['name'])) === strtolower(trim($m))) { $found = true; break; }
@@ -248,9 +358,35 @@ sort($all_project_names);
                                     <span class="member-badge <?php echo $found ? '' : 'unmatched'; ?>">
                                         <i class="fa-solid fa-<?php echo $found ? 'user-check' : 'user-xmark'; ?> fa-xs"></i>
                                         <?php echo htmlspecialchars($m); ?>
+                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Remove <?php echo htmlspecialchars(addslashes($m)); ?> from <?php echo htmlspecialchars(addslashes($proj)); ?>?');">
+                                            <input type="hidden" name="action" value="remove_project_member">
+                                            <input type="hidden" name="project_name" value="<?php echo htmlspecialchars($proj); ?>">
+                                            <input type="hidden" name="member_name" value="<?php echo htmlspecialchars($m); ?>">
+                                            <button type="submit" class="btn-remove-badge" title="Remove <?php echo htmlspecialchars($m); ?> from project">
+                                                <i class="fa-solid fa-xmark"></i>
+                                            </button>
+                                        </form>
                                     </span>
                                 <?php endforeach; ?>
+                                <?php if(empty($members)): ?>
+                                    <span class="text-muted small italic">No team members assigned yet.</span>
+                                <?php endif; ?>
                             </div>
+
+                            <!-- Add Member to Project Card -->
+                            <form method="POST" class="d-flex gap-2">
+                                <input type="hidden" name="action" value="add_project_member">
+                                <input type="hidden" name="project_name" value="<?php echo htmlspecialchars($proj); ?>">
+                                <select name="member_name" class="form-select form-select-sm" style="font-size:12px;" required>
+                                    <option value="">+ Add Member to <?php echo htmlspecialchars($proj); ?>...</option>
+                                    <?php foreach ($all_users as $u): ?>
+                                        <?php if (!in_array($u['name'], $members)): ?>
+                                            <option value="<?php echo htmlspecialchars($u['name']); ?>"><?php echo htmlspecialchars($u['name']); ?> (<?php echo ucfirst($u['role']); ?>)</option>
+                                        <?php endif; ?>
+                                    <?php endforeach; ?>
+                                </select>
+                                <button type="submit" class="btn btn-sm btn-primary px-3" style="font-size:12px;" title="Add Selected Member"><i class="fa-solid fa-user-plus"></i></button>
+                            </form>
                         </div>
                     </div>
                     <?php endforeach; ?>
@@ -258,7 +394,8 @@ sort($all_project_names);
                 <div class="mt-3 small text-muted">
                     <i class="fa-solid fa-circle-info me-1"></i>
                     <span class="text-primary fw-semibold">Purple badge</span> = user found in system &nbsp;|&nbsp;
-                    <span class="text-warning fw-semibold">Yellow badge</span> = user not yet added to system (add in Team Management first)
+                    <span class="text-warning fw-semibold">Yellow badge</span> = user not yet added to system &nbsp;|&nbsp;
+                    <span class="text-danger fw-semibold"><i class="fa-solid fa-xmark"></i> icon</span> = Click to remove user from project
                 </div>
             </div>
         </div>
@@ -371,11 +508,59 @@ function useCustomProject() {
     sel.add(opt);
     sel.value = val;
 }
+</script>
+
+<!-- Add New Project Modal -->
+<div class="modal fade text-start" id="addProjectModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST">
+                <input type="hidden" name="action" value="add_new_project">
+                <div class="modal-header bg-light">
+                    <h5 class="modal-title"><i class="fa-solid fa-building-circle-check me-2 text-primary"></i>Add New Project Mapping</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Project Name</label>
+                        <input type="text" name="new_project_name" class="form-control" placeholder="e.g. Fortune Heights, Paradise City..." required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-plus me-1"></i>Add Project</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// Sidebar toggle
+if (window.innerWidth <= 992) document.body.classList.add('sidebar-mini');
+const sidebarToggle = document.getElementById('sidebarToggle');
+if (sidebarToggle) sidebarToggle.addEventListener('click', () => document.body.classList.toggle('sidebar-mini'));
+
+function toggleSelected(cb, lblId) {
+    document.getElementById(lblId).classList.toggle('selected', cb.checked);
+}
+
+function useCustomProject() {
+    const val = document.getElementById('customProjectInput').value.trim();
+    if (!val) return;
+    const sel = document.getElementById('projectSelect');
+    for (let i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === val) { sel.value = val; return; }
+    }
+    const opt = new Option(val, val, true, true);
+    sel.add(opt);
+    sel.value = val;
+}
 
 // When project changes, auto-check existing members
 document.getElementById('projectSelect').addEventListener('change', function() {
     const proj = this.value;
-    // Uncheck all
     document.querySelectorAll('#userCheckboxGrid input[type=checkbox]').forEach(cb => {
         cb.checked = false;
         document.getElementById('lbl_' + cb.value)?.classList.remove('selected');
@@ -383,12 +568,8 @@ document.getElementById('projectSelect').addEventListener('change', function() {
 
     if (!proj) return;
 
-    // Pre-defined project member names for auto-highlight
-    const defined = <?php echo json_encode($defined_projects); ?>;
-    // DB saved assignments
     const saved = <?php echo json_encode(array_map(fn($rows) => array_column($rows, 'user_id'), $current_assignments)); ?>;
 
-    // First try DB saved
     if (saved[proj]) {
         saved[proj].forEach(uid => {
             const cb = document.querySelector(`#userCheckboxGrid input[value="${uid}"]`);

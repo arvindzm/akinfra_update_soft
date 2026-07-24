@@ -14,6 +14,41 @@ if ($role === 'admin') {
     redirect('leads.php');
 }
 
+// Handle Manual Lead Addition
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'add_lead_manual') {
+    $name    = trim($_POST['name']);
+    $phone   = trim($_POST['phone']);
+    $email   = trim($_POST['email']);
+    $project = trim($_POST['project'] ?? '');
+    
+    $clean_phone = preg_replace('/[^0-9]/', '', $phone);
+    $last_10 = !empty($clean_phone) ? substr($clean_phone, -10) : '';
+    
+    $check_stmt = $pdo->prepare("
+        SELECT id FROM leads 
+        WHERE (phone != '' AND REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') LIKE ?)
+           OR (email != '' AND email = ?)
+    ");
+    $check_stmt->execute(['%' . $last_10, $email]);
+    if ($check_stmt->fetch()) {
+        $error = "Duplicate Lead Blocked: A lead with phone number '{$phone}' or email '{$email}' already exists in the system!";
+    } else {
+        $canonical_project = !empty($project) ? normalizeProjectName($project) : null;
+        
+        $telecaller_assign = ($role === 'telecaller') ? $user_id : null;
+        $sales_assign = ($role === 'sales') ? $user_id : null;
+
+        $insert_stmt = $pdo->prepare("INSERT INTO leads (source, project, name, email, phone, status, telecaller_id, salesperson_id) VALUES ('manual', ?, ?, ?, ?, 'New', ?, ?)");
+        $insert_stmt->execute([$canonical_project, $name, $email, $phone, $telecaller_assign, $sales_assign]);
+        $new_lead_id = $pdo->lastInsertId();
+
+        require_once 'includes/mailer.php';
+        sendNewLeadNotification($pdo, $new_lead_id, $user_id);
+
+        $success = "Lead added manually to your list successfully!";
+    }
+}
+
 // Handle Lead Deletion
 if (isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
@@ -42,14 +77,24 @@ if ($role === 'telecaller') {
     $sales_team = $sales_stmt->fetchAll();
 }
 
-// Handle form submission for status update (telecaller - full sales power)
+// Handle form submission for status update (telecaller - full end-to-end sales power)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'update_lead' && $role === 'telecaller') {
     $lead_id = $_POST['lead_id'];
     $status = $_POST['status'];
     $sales_id = !empty($_POST['salesperson_id']) ? $_POST['salesperson_id'] : null;
     $note = trim($_POST['note']);
-    $deal_value = ($status === 'Converted' && !empty($_POST['deal_value'])) ? floatval($_POST['deal_value']) : null;
+    $follow_up_at = !empty($_POST['follow_up_at']) ? $_POST['follow_up_at'] : null;
+    $site_visit_at = !empty($_POST['site_visit_at']) ? $_POST['site_visit_at'] : null;
+    
+    $deal_value = (in_array($status, ['Converted', 'Negotiation']) && !empty($_POST['deal_value'])) ? floatval($_POST['deal_value']) : null;
+    $booking_amount = ($status === 'Converted' && !empty($_POST['booking_amount'])) ? floatval($_POST['booking_amount']) : null;
+    $unit_number = (!empty($_POST['unit_number'])) ? trim($_POST['unit_number']) : null;
     $dead_reason = ($status === 'Dead' && !empty($_POST['dead_reason'])) ? trim($_POST['dead_reason']) : null;
+
+    // Determine site visit status
+    $site_visit_status = 'None';
+    if ($status === 'Site Visit Scheduled') $site_visit_status = 'Scheduled';
+    elseif ($status === 'Site Visit Done') $site_visit_status = 'Completed';
 
     // If status is 'Assigned to Sales', ensure a salesperson is selected
     if ($status === 'Assigned to Sales' && !$sales_id) {
@@ -63,24 +108,67 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
         }
     }
 
-    // If Converted/Dead — telecaller can close directly (self as salesperson if none assigned)
-    if (in_array($status, ['Converted', 'Dead']) && !$sales_id) {
-        $sales_id = $user_id; // telecaller closes the deal themselves
+    // If sales/closure action done by telecaller directly, assign self as salesperson if none set
+    if (in_array($status, ['Converted', 'Dead', 'Site Visit Scheduled', 'Site Visit Done', 'Negotiation']) && !$sales_id) {
+        $sales_id = $user_id; 
     }
 
     if (!isset($error)) {
         try {
-            $follow_up_at = !empty($_POST['follow_up_at']) ? $_POST['follow_up_at'] : null;
-            $update_stmt = $pdo->prepare("UPDATE leads SET status = ?, salesperson_id = ?, follow_up_at = ?, deal_value = ?, dead_reason = ? WHERE id = ? AND telecaller_id = ?");
-            $update_stmt->execute([$status, $sales_id, $follow_up_at, $deal_value, $dead_reason, $lead_id, $user_id]);
+            $update_stmt = $pdo->prepare("
+                UPDATE leads 
+                SET status = ?, 
+                    salesperson_id = ?, 
+                    follow_up_at = ?, 
+                    site_visit_at = CASE WHEN ? IS NOT NULL THEN ? ELSE site_visit_at END, 
+                    site_visit_status = CASE 
+                        WHEN ? = 'Scheduled' THEN 'Scheduled' 
+                        WHEN ? = 'Completed' THEN 'Completed' 
+                        ELSE site_visit_status 
+                    END,
+                    deal_value = CASE WHEN ? IS NOT NULL THEN ? ELSE deal_value END, 
+                    booking_amount = CASE WHEN ? IS NOT NULL THEN ? ELSE booking_amount END,
+                    unit_number = CASE WHEN ? IS NOT NULL THEN ? ELSE unit_number END,
+                    dead_reason = ? 
+                WHERE id = ? AND telecaller_id = ?
+            ");
+            $update_stmt->execute([
+                $status, $sales_id, $follow_up_at, 
+                $site_visit_at, $site_visit_at,
+                $site_visit_status, $site_visit_status,
+                $deal_value, $deal_value, 
+                $booking_amount, $booking_amount,
+                $unit_number, $unit_number,
+                $dead_reason,
+                $lead_id, $user_id
+            ]);
 
-            if (!empty($note)) {
-                $note_stmt = $pdo->prepare("INSERT INTO lead_notes (lead_id, user_id, note) VALUES (?, ?, ?)");
-                $note_stmt->execute([$lead_id, $user_id, $note]);
+            // Construct activity note log for history
+            $log_parts = ["Status updated to [$status]"];
+            if ($status === 'Site Visit Scheduled' && $site_visit_at) {
+                $log_parts[] = "Site Visit scheduled for: " . date('d M Y h:i A', strtotime($site_visit_at));
+            } elseif ($status === 'Site Visit Done') {
+                $log_parts[] = "Site Visit completed";
+            } elseif ($status === 'Negotiation') {
+                if ($unit_number) $log_parts[] = "Unit/Plot #: " . $unit_number;
+                if ($deal_value) $log_parts[] = "Offered Price: ₹" . number_format($deal_value, 2);
+            } elseif ($status === 'Converted') {
+                if ($unit_number) $log_parts[] = "Unit/Plot #: " . $unit_number;
+                if ($deal_value) $log_parts[] = "Final Deal Value: ₹" . number_format($deal_value, 2);
+                if ($booking_amount) $log_parts[] = "Booking Token Paid: ₹" . number_format($booking_amount, 2);
+            } elseif ($status === 'Dead' && $dead_reason) {
+                $log_parts[] = "Reason: " . $dead_reason;
             }
-            $success = "Lead updated successfully.";
+
+            $log_prefix = implode(" | ", $log_parts);
+            $full_note = $log_prefix . ($note ? "\nNote: " . $note : "");
+
+            $note_stmt = $pdo->prepare("INSERT INTO lead_notes (lead_id, user_id, note) VALUES (?, ?, ?)");
+            $note_stmt->execute([$lead_id, $user_id, $full_note]);
+
+            $success = "Lead updated successfully!";
         } catch(PDOException $e) {
-            $error = "Error updating lead.";
+            $error = "Error updating lead: " . $e->getMessage();
         }
     }
 }
@@ -110,6 +198,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
 // Handle Search and Filter
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
+$from_date = isset($_GET['from_date']) ? trim($_GET['from_date']) : '';
+$to_date = isset($_GET['to_date']) ? trim($_GET['to_date']) : '';
 
 $query = "";
 $params = [$user_id];
@@ -164,6 +254,16 @@ if ($status_filter !== '') {
     $params[] = $status_filter;
 }
 
+if ($from_date !== '') {
+    $query .= " AND DATE(l.created_at) >= ?";
+    $params[] = $from_date;
+}
+
+if ($to_date !== '') {
+    $query .= " AND DATE(l.created_at) <= ?";
+    $params[] = $to_date;
+}
+
 $query .= " ORDER BY l.created_at DESC";
 
 $stmt = $pdo->prepare($query);
@@ -216,11 +316,14 @@ $leads = $stmt->fetchAll();
     <div id="content">
         <!-- Top Navbar -->
         <div class="top-navbar">
-            <div class="d-flex align-items-center gap-3">
+            <div class="d-flex align-items-center gap-3 w-100 me-3">
                 <button class="btn btn-light d-none d-lg-block" id="sidebarToggle">
                     <i class="fa-solid fa-bars"></i>
                 </button>
-                <h2 class="page-title"><?php echo $role === 'telecaller' ? 'My Assigned Leads' : 'My Pipeline Leads'; ?></h2>
+                <h2 class="page-title me-auto mb-0"><?php echo $role === 'telecaller' ? 'My Assigned Leads' : 'My Pipeline Leads'; ?></h2>
+                <button type="button" class="btn btn-primary px-3 shadow-sm text-nowrap" data-bs-toggle="modal" data-bs-target="#addLeadModal">
+                    <i class="fa-solid fa-user-plus me-2"></i>+ Add New Lead
+                </button>
             </div>
             <div class="user-profile dropdown d-flex align-items-center">
                 <div class="me-2 text-end d-none d-md-block">
@@ -261,19 +364,24 @@ $leads = $stmt->fetchAll();
             <div class="card mb-4">
                 <div class="card-body p-4">
                     <form method="GET" action="my_leads.php" class="row g-3">
-                        <div class="col-lg-4 col-md-5">
-                            <label class="form-label text-muted fw-semibold small">Search</label>
+                        <div class="col-xl-3 col-lg-4 col-md-6">
+                            <label class="form-label text-muted fw-semibold small mb-1">Search</label>
                             <input type="text" name="search" class="form-control" placeholder="Name, Phone, or Email..." value="<?php echo htmlspecialchars($search); ?>">
                         </div>
-                        <div class="col-lg-3 col-md-3">
-                            <label class="form-label text-muted fw-semibold small">Status</label>
+                        <div class="col-xl-3 col-lg-4 col-md-6">
+                            <label class="form-label text-muted fw-semibold small mb-1">Status</label>
                             <select name="status" class="form-select">
                                 <option value="">All Statuses</option>
                                 <?php if ($role === 'telecaller'): ?>
                                     <option value="New" <?php echo $status_filter == 'New' ? 'selected' : ''; ?>>New</option>
                                     <option value="In Progress" <?php echo $status_filter == 'In Progress' ? 'selected' : ''; ?>>In Progress</option>
+                                    <option value="Follow Up" <?php echo $status_filter == 'Follow Up' ? 'selected' : ''; ?>>Follow Up</option>
+                                    <option value="Site Visit Scheduled" <?php echo $status_filter == 'Site Visit Scheduled' ? 'selected' : ''; ?>>Site Visit Scheduled</option>
+                                    <option value="Site Visit Done" <?php echo $status_filter == 'Site Visit Done' ? 'selected' : ''; ?>>Site Visit Done</option>
+                                    <option value="Negotiation" <?php echo $status_filter == 'Negotiation' ? 'selected' : ''; ?>>Negotiation (Len-Den)</option>
                                     <option value="Assigned to Sales" <?php echo $status_filter == 'Assigned to Sales' ? 'selected' : ''; ?>>Assigned to Sales</option>
-                                    <option value="Dead" <?php echo $status_filter == 'Dead' ? 'selected' : ''; ?>>Dead</option>
+                                    <option value="Converted" <?php echo $status_filter == 'Converted' ? 'selected' : ''; ?>>Converted (Won)</option>
+                                    <option value="Dead" <?php echo $status_filter == 'Dead' ? 'selected' : ''; ?>>Dead (Lost)</option>
                                 <?php else: ?>
                                     <option value="Assigned to Sales" <?php echo $status_filter == 'Assigned to Sales' ? 'selected' : ''; ?>>Assigned to Sales</option>
                                     <option value="Converted" <?php echo $status_filter == 'Converted' ? 'selected' : ''; ?>>Converted</option>
@@ -281,11 +389,31 @@ $leads = $stmt->fetchAll();
                                 <?php endif; ?>
                             </select>
                         </div>
-                        <div class="col-lg-5 col-md-4">
-                            <label class="form-label d-block">&nbsp;</label>
+                        <div class="col-xl-3 col-lg-4 col-md-6">
+                            <label class="form-label text-muted fw-semibold small mb-1"><i class="fa-regular fa-calendar me-1"></i>From Date</label>
+                            <input type="date" name="from_date" class="form-control" value="<?php echo htmlspecialchars($from_date); ?>">
+                        </div>
+                        <div class="col-xl-3 col-lg-4 col-md-6">
+                            <label class="form-label text-muted fw-semibold small mb-1"><i class="fa-regular fa-calendar me-1"></i>To Date</label>
+                            <input type="date" name="to_date" class="form-control" value="<?php echo htmlspecialchars($to_date); ?>">
+                        </div>
+                        <div class="col-12 mt-3 pt-3 border-top d-flex flex-wrap align-items-center justify-content-between gap-2">
                             <div class="d-flex gap-2">
-                                <button type="submit" class="btn btn-primary px-4 text-nowrap"><i class="fa-solid fa-magnifying-glass me-2"></i>Filter</button>
-                                <a href="my_leads.php" class="btn btn-light px-3"><i class="fa-solid fa-rotate-right"></i></a>
+                                <button type="submit" class="btn btn-primary px-4 fw-semibold"><i class="fa-solid fa-magnifying-glass me-2"></i>Filter Leads</button>
+                                <a href="my_leads.php" class="btn btn-outline-secondary px-3" title="Reset Filters"><i class="fa-solid fa-rotate-right me-1"></i>Reset</a>
+                            </div>
+                            <div>
+                                <?php 
+                                    $export_params = http_build_query([
+                                        'search'    => $search,
+                                        'status'    => $status_filter,
+                                        'from_date' => $from_date,
+                                        'to_date'   => $to_date
+                                    ]);
+                                ?>
+                                <a href="export.php?<?php echo $export_params; ?>" class="btn btn-success font-semibold px-4 shadow-sm" title="Download Filtered CSV">
+                                    <i class="fa-solid fa-file-csv me-2"></i>Export Filtered CSV
+                                </a>
                             </div>
                         </div>
                     </form>
@@ -315,6 +443,9 @@ $leads = $stmt->fetchAll();
                                 <td>
                                     <div class="fw-semibold"><?php echo htmlspecialchars($lead['name']); ?></div>
                                     <div class="text-muted small">Source: <span class="text-capitalize"><?php echo htmlspecialchars($lead['source']); ?></span></div>
+                                    <?php if (!empty($lead['unit_number'])): ?>
+                                        <div class="badge bg-light text-dark border mt-1" style="font-size: 10px;"><i class="fa-solid fa-building me-1"></i>Unit: <?php echo htmlspecialchars($lead['unit_number']); ?></div>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <?php if(!empty($lead['project'])): ?>
@@ -325,28 +456,55 @@ $leads = $stmt->fetchAll();
                                 </td>
                                 <td>
                                     <div class="d-flex align-items-center gap-1">
-                                        <i class="fa-solid fa-phone text-muted me-2"></i>
-                                        <?php echo htmlspecialchars($lead['phone']); ?>
-                                        <a href="https://api.whatsapp.com/send?phone=<?php echo preg_replace('/[^0-9]/', '', $lead['phone']); ?>&text=Hello%20<?php echo urlencode($lead['name']); ?>," target="_blank" class="text-success" title="Message on WhatsApp">
+                                        <a href="tel:<?php echo preg_replace('/[^0-9+]/', '', $lead['phone']); ?>" class="text-dark fw-semibold text-decoration-none" title="Click to Call <?php echo htmlspecialchars($lead['phone']); ?>">
+                                            <i class="fa-solid fa-phone text-primary me-1"></i><?php echo htmlspecialchars($lead['phone']); ?>
+                                        </a>
+                                        <?php 
+                                            $wa_phone = preg_replace('/[^0-9]/', '', $lead['phone']);
+                                            if(strlen($wa_phone) == 10) { $wa_phone = '91' . $wa_phone; }
+                                        ?>
+                                        <a href="https://api.whatsapp.com/send?phone=<?php echo $wa_phone; ?>&text=Hello%20<?php echo urlencode($lead['name']); ?>," target="_blank" class="text-success ms-1 fs-6" title="Chat on WhatsApp">
                                             <i class="fa-brands fa-whatsapp fw-bold"></i>
                                         </a>
                                     </div>
-                                    <?php if($lead['email']): ?>
-                                    <div class="text-muted small"><i class="fa-solid fa-envelope me-2"></i><?php echo htmlspecialchars($lead['email']); ?></div>
+                                    <?php if(!empty($lead['email'])): ?>
+                                    <div class="small mt-1">
+                                        <a href="mailto:<?php echo htmlspecialchars($lead['email']); ?>" class="text-muted text-decoration-none" title="Send Email">
+                                            <i class="fa-solid fa-envelope me-1 text-secondary"></i><?php echo htmlspecialchars($lead['email']); ?>
+                                        </a>
+                                    </div>
                                     <?php endif; ?>
                                 </td>
                                 <td>
                                     <?php 
                                         $badge_class = 'bg-secondary';
+                                        $badge_icon = 'fa-tag';
                                         switch($lead['status']) {
-                                            case 'New': $badge_class = 'badge-new'; break;
-                                            case 'In Progress': $badge_class = 'badge-progress'; break;
-                                            case 'Assigned to Sales': $badge_class = 'badge-assigned'; break;
-                                            case 'Converted': $badge_class = 'badge-converted'; break;
-                                            case 'Dead': $badge_class = 'badge-dead'; break;
+                                            case 'New': $badge_class = 'badge-new'; $badge_icon = 'fa-phone'; break;
+                                            case 'In Progress': $badge_class = 'badge-progress'; $badge_icon = 'fa-comments'; break;
+                                            case 'Follow Up': $badge_class = 'badge-followup'; $badge_icon = 'fa-clock'; break;
+                                            case 'Site Visit Scheduled': $badge_class = 'badge-sv-scheduled'; $badge_icon = 'fa-car-side'; break;
+                                            case 'Site Visit Done': $badge_class = 'badge-sv-done'; $badge_icon = 'fa-calendar-check'; break;
+                                            case 'Negotiation': $badge_class = 'badge-negotiation'; $badge_icon = 'fa-handshake'; break;
+                                            case 'Assigned to Sales': $badge_class = 'badge-assigned'; $badge_icon = 'fa-share-nodes'; break;
+                                            case 'Converted': $badge_class = 'badge-converted'; $badge_icon = 'fa-circle-check'; break;
+                                            case 'Dead': $badge_class = 'badge-dead'; $badge_icon = 'fa-circle-xmark'; break;
                                         }
                                     ?>
-                                    <span class="badge <?php echo $badge_class; ?>"><?php echo $lead['status']; ?></span>
+                                    <span class="badge <?php echo $badge_class; ?>"><i class="fa-solid <?php echo $badge_icon; ?> me-1"></i><?php echo htmlspecialchars($lead['status']); ?></span>
+                                    <?php if($lead['status'] === 'New'): 
+                                        $hours_passed = floor((time() - strtotime($lead['created_at'])) / 3600);
+                                        $hours_left = max(0, 24 - $hours_passed);
+                                    ?>
+                                        <div class="mt-1">
+                                            <span class="badge bg-warning text-dark border" style="font-size: 10px;" title="Lead must be updated within 24 hours to prevent auto-reassignment">
+                                                <i class="fa-solid fa-hourglass-half me-1"></i><?php echo $hours_left; ?>h to act
+                                            </span>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if($lead['site_visit_at'] && in_array($lead['status'], ['Site Visit Scheduled', 'Site Visit Done'])): ?>
+                                        <div class="small mt-1 fw-bold" style="font-size: 11px; color: #6b21a8;"><i class="fa-solid fa-calendar-day me-1"></i><?php echo date('d M h:i A', strtotime($lead['site_visit_at'])); ?></div>
+                                    <?php endif; ?>
                                     <?php if($lead['follow_up_at'] && strtotime($lead['follow_up_at']) <= time() && !in_array($lead['status'], ['Converted', 'Dead'])): ?>
                                         <span class="badge bg-danger text-uppercase ms-1" style="font-size: 9px; animation: blinker 1.5s linear infinite;" title="Follow-up Overdue"><i class="fa-solid fa-bell me-1"></i>Due</span>
                                     <?php endif; ?>
@@ -378,11 +536,11 @@ $leads = $stmt->fetchAll();
                             <?php if($role === 'telecaller'): ?>
                             <!-- Update Modal for telecaller -->
                             <div class="modal fade" id="updateModal<?php echo $lead['id']; ?>" tabindex="-1">
-                                <div class="modal-dialog">
+                                <div class="modal-dialog modal-lg">
                                     <div class="modal-content text-start">
                                         <form method="POST" action="">
                                             <div class="modal-header">
-                                                <h5 class="modal-title">Update Lead: <?php echo htmlspecialchars($lead['name']); ?></h5>
+                                                <h5 class="modal-title"><i class="fa-solid fa-user-pen me-2 text-primary"></i>Update Lead: <?php echo htmlspecialchars($lead['name']); ?></h5>
                                                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                                             </div>
                                             <div class="modal-body">
@@ -390,16 +548,21 @@ $leads = $stmt->fetchAll();
                                                 <input type="hidden" name="lead_id" value="<?php echo $lead['id']; ?>">
                                                 
                                                 <div class="mb-3">
-                                                    <label class="form-label text-muted fw-semibold">Status</label>
+                                                    <label class="form-label text-muted fw-semibold">Lead Stage / Status</label>
                                                     <select name="status" class="form-select status-selector" data-lead-id="<?php echo $lead['id']; ?>" required>
-                                                        <option value="New" <?php echo $lead['status'] == 'New' ? 'selected' : ''; ?>>New</option>
-                                                        <option value="In Progress" <?php echo $lead['status'] == 'In Progress' ? 'selected' : ''; ?>>In Progress</option>
-                                                        <option value="Assigned to Sales" <?php echo $lead['status'] == 'Assigned to Sales' ? 'selected' : ''; ?>>Assigned to Sales</option>
-                                                        <option value="Converted" <?php echo $lead['status'] == 'Converted' ? 'selected' : ''; ?>>✅ Converted (Won)</option>
+                                                        <option value="New" <?php echo $lead['status'] == 'New' ? 'selected' : ''; ?>>📞 New (Fresh Lead)</option>
+                                                        <option value="In Progress" <?php echo $lead['status'] == 'In Progress' ? 'selected' : ''; ?>>💬 In Progress (Contacted)</option>
+                                                        <option value="Follow Up" <?php echo $lead['status'] == 'Follow Up' ? 'selected' : ''; ?>>⏰ Scheduled Follow Up</option>
+                                                        <option value="Site Visit Scheduled" <?php echo $lead['status'] == 'Site Visit Scheduled' ? 'selected' : ''; ?>>🚗 Site Visit Scheduled</option>
+                                                        <option value="Site Visit Done" <?php echo $lead['status'] == 'Site Visit Done' ? 'selected' : ''; ?>>✅ Site Visit Completed</option>
+                                                        <option value="Negotiation" <?php echo $lead['status'] == 'Negotiation' ? 'selected' : ''; ?>>🤝 Negotiation / Pricing (Len-Den)</option>
+                                                        <option value="Assigned to Sales" <?php echo $lead['status'] == 'Assigned to Sales' ? 'selected' : ''; ?>>➡️ Forward to Sales Team</option>
+                                                        <option value="Converted" <?php echo $lead['status'] == 'Converted' ? 'selected' : ''; ?>>🎉 Converted (Deal Won / Closed)</option>
                                                         <option value="Dead" <?php echo $lead['status'] == 'Dead' ? 'selected' : ''; ?>>❌ Dead (Lost)</option>
                                                     </select>
                                                 </div>
 
+                                                <!-- Forward to Sales dropdown -->
                                                 <div class="mb-3 sales-dropdown" id="sales-dropdown-<?php echo $lead['id']; ?>" style="display: <?php echo $lead['status'] == 'Assigned to Sales' ? 'block' : 'none'; ?>">
                                                      <label class="form-label text-muted fw-semibold">Forward to Salesperson</label>
                                                      <?php if(count($sales_team) == 0): ?>
@@ -416,19 +579,40 @@ $leads = $stmt->fetchAll();
                                                              <?php endforeach; ?>
                                                          </select>
                                                      <?php endif; ?>
-                                                 </div>
-                                                
-                                                <div class="mb-3 deal-value-group" id="tc-deal-value-<?php echo $lead['id']; ?>" style="display: <?php echo $lead['status'] == 'Converted' ? 'block' : 'none'; ?>">
-                                                    <label class="form-label text-muted fw-semibold">Deal Value (₹) <span class="text-danger">*</span></label>
-                                                    <input type="number" step="0.01" min="0" name="deal_value" class="form-control" placeholder="Enter deal amount..." value="<?php echo $lead['deal_value'] ?? ''; ?>">
                                                 </div>
 
+                                                <!-- Site Visit Date & Time -->
+                                                <div class="mb-3" id="tc-sitevisit-group-<?php echo $lead['id']; ?>" style="display: <?php echo in_array($lead['status'], ['Site Visit Scheduled', 'Site Visit Done']) ? 'block' : 'none'; ?>">
+                                                    <label class="form-label text-purple fw-semibold"><i class="fa-solid fa-calendar-check me-1"></i> Site Visit Date & Time</label>
+                                                    <input type="datetime-local" name="site_visit_at" class="form-control border-purple" value="<?php echo $lead['site_visit_at'] ? date('Y-m-d\TH:i', strtotime($lead['site_visit_at'])) : ''; ?>">
+                                                </div>
+
+                                                <!-- Unit / Plot Number -->
+                                                <div class="mb-3" id="tc-unit-group-<?php echo $lead['id']; ?>" style="display: <?php echo in_array($lead['status'], ['Negotiation', 'Converted']) ? 'block' : 'none'; ?>">
+                                                    <label class="form-label text-muted fw-semibold"><i class="fa-solid fa-building me-1"></i> Unit / Plot Details</label>
+                                                    <input type="text" name="unit_number" class="form-control" placeholder="e.g. Plot A-12, Flat 304, Villa 5" value="<?php echo htmlspecialchars($lead['unit_number'] ?? ''); ?>">
+                                                </div>
+                                                
+                                                <!-- Deal Value -->
+                                                <div class="mb-3 deal-value-group" id="tc-deal-value-<?php echo $lead['id']; ?>" style="display: <?php echo in_array($lead['status'], ['Converted', 'Negotiation']) ? 'block' : 'none'; ?>">
+                                                    <label class="form-label text-muted fw-semibold"><i class="fa-solid fa-indian-rupee-sign me-1"></i> Deal / Offered Value (₹)</label>
+                                                    <input type="number" step="0.01" min="0" name="deal_value" class="form-control" placeholder="Enter deal amount in ₹..." value="<?php echo $lead['deal_value'] ?? ''; ?>">
+                                                </div>
+
+                                                <!-- Booking / Token Amount (for Converted) -->
+                                                <div class="mb-3" id="tc-booking-group-<?php echo $lead['id']; ?>" style="display: <?php echo $lead['status'] == 'Converted' ? 'block' : 'none'; ?>">
+                                                    <label class="form-label text-success fw-semibold"><i class="fa-solid fa-money-bill-wave me-1"></i> Booking / Token Amount Collected (₹)</label>
+                                                    <input type="number" step="0.01" min="0" name="booking_amount" class="form-control" placeholder="Enter token/booking amount paid by customer..." value="<?php echo $lead['booking_amount'] ?? ''; ?>">
+                                                </div>
+
+                                                <!-- Reason for Loss (for Dead) -->
                                                 <div class="mb-3" id="tc-dead-reason-<?php echo $lead['id']; ?>" style="display: <?php echo $lead['status'] == 'Dead' ? 'block' : 'none'; ?>">
-                                                    <label class="form-label text-muted fw-semibold">Reason for Loss</label>
+                                                    <label class="form-label text-danger fw-semibold"><i class="fa-solid fa-circle-xmark me-1"></i> Reason for Loss</label>
                                                     <select name="dead_reason" class="form-select">
                                                         <option value="">Select reason...</option>
                                                         <option value="Price too high" <?php echo $lead['dead_reason'] == 'Price too high' ? 'selected':'' ?>>Price too high</option>
                                                         <option value="Competitor chosen" <?php echo $lead['dead_reason'] == 'Competitor chosen' ? 'selected':'' ?>>Competitor chosen</option>
+                                                        <option value="Location / Connectivity issue" <?php echo $lead['dead_reason'] == 'Location / Connectivity issue' ? 'selected':'' ?>>Location / Connectivity issue</option>
                                                         <option value="No requirement now" <?php echo $lead['dead_reason'] == 'No requirement now' ? 'selected':'' ?>>No requirement now</option>
                                                         <option value="Wrong/Fake details" <?php echo $lead['dead_reason'] == 'Wrong/Fake details' ? 'selected':'' ?>>Wrong/Fake details</option>
                                                         <option value="No response after multiple calls" <?php echo $lead['dead_reason'] == 'No response after multiple calls' ? 'selected':'' ?>>No response after multiple calls</option>
@@ -436,19 +620,21 @@ $leads = $stmt->fetchAll();
                                                     </select>
                                                 </div>
 
-                                                <div class="mb-3">
-                                                    <label class="form-label text-muted fw-semibold">Follow-up Date & Time (Optional)</label>
+                                                <!-- Follow-up Date & Time -->
+                                                <div class="mb-3" id="tc-followup-group-<?php echo $lead['id']; ?>" style="display: <?php echo ($lead['status'] === 'Follow Up') ? 'block' : 'none'; ?>">
+                                                    <label class="form-label text-warning fw-semibold"><i class="fa-solid fa-clock me-1"></i> Follow-up Date & Time</label>
                                                     <input type="datetime-local" name="follow_up_at" class="form-control" value="<?php echo $lead['follow_up_at'] ? date('Y-m-d\TH:i', strtotime($lead['follow_up_at'])) : ''; ?>">
                                                 </div>
 
+                                                <!-- Discussion Notes -->
                                                 <div class="mb-3">
-                                                    <label class="form-label text-muted fw-semibold">Add Note (Optional)</label>
-                                                    <textarea name="note" class="form-control" rows="3" placeholder="Enter conversation details..."></textarea>
+                                                    <label class="form-label text-muted fw-semibold"><i class="fa-solid fa-comment-dots me-1"></i> Conversation / Discussion Notes</label>
+                                                    <textarea name="note" class="form-control" rows="3" placeholder="Enter conversation details, customer feedback, agreement notes..."></textarea>
                                                 </div>
                                             </div>
                                             <div class="modal-footer">
                                                 <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
-                                                <button type="submit" class="btn btn-primary">Save Changes</button>
+                                                <button type="submit" class="btn btn-primary px-4"><i class="fa-solid fa-floppy-disk me-2"></i>Save Changes</button>
                                             </div>
                                         </form>
                                     </div>
@@ -544,6 +730,53 @@ $leads = $stmt->fetchAll();
         </div>
     </div>
 
+    <!-- Add Lead Modal -->
+    <div class="modal fade" id="addLeadModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="POST">
+                    <input type="hidden" name="action" value="add_lead_manual">
+                    <div class="modal-header bg-light">
+                        <h5 class="modal-title"><i class="fa-solid fa-user-plus me-2 text-primary"></i>Add New Lead (Manual Entry)</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Customer Name <span class="text-danger">*</span></label>
+                            <input type="text" name="name" class="form-control" placeholder="Full Name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Phone Number <span class="text-danger">*</span></label>
+                            <input type="tel" name="phone" class="form-control" placeholder="10-digit mobile number" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Email Address</label>
+                            <input type="email" name="email" class="form-control" placeholder="name@example.com">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Project Name</label>
+                            <select name="project" class="form-select">
+                                <option value="">Select Project...</option>
+                                <?php
+                                $all_projects = $pdo->query("SELECT DISTINCT project FROM leads WHERE project IS NOT NULL AND project != '' ORDER BY project")->fetchAll(PDO::FETCH_COLUMN);
+                                if (empty($all_projects)) {
+                                    $all_projects = ['Vayu Green', 'Vayu Villa Commercial', 'Golden Cryst', 'My Home Century', 'Green Valley'];
+                                }
+                                foreach ($all_projects as $pr): ?>
+                                    <option value="<?php echo htmlspecialchars($pr); ?>"><?php echo htmlspecialchars($pr); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-check me-1"></i>Save Lead</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/app.js"></script>
@@ -561,15 +794,27 @@ $leads = $stmt->fetchAll();
             });
         }
 
-        // Telecaller modal: show/hide Deal Value & Dead Reason based on status
+        // Telecaller modal: show/hide field groups based on status
         document.querySelectorAll('.status-selector').forEach(function(sel) {
             sel.addEventListener('change', function() {
                 const leadId = this.dataset.leadId;
                 const val    = this.value;
-                const dvEl   = document.getElementById('tc-deal-value-' + leadId);
-                const drEl   = document.getElementById('tc-dead-reason-' + leadId);
-                if (dvEl) dvEl.style.display = val === 'Converted' ? 'block' : 'none';
-                if (drEl) drEl.style.display = val === 'Dead'      ? 'block' : 'none';
+
+                const salesEl  = document.getElementById('sales-dropdown-' + leadId);
+                const fuEl     = document.getElementById('tc-followup-group-' + leadId);
+                const svEl     = document.getElementById('tc-sitevisit-group-' + leadId);
+                const unitEl   = document.getElementById('tc-unit-group-' + leadId);
+                const dvEl     = document.getElementById('tc-deal-value-' + leadId);
+                const bkEl     = document.getElementById('tc-booking-group-' + leadId);
+                const drEl     = document.getElementById('tc-dead-reason-' + leadId);
+
+                if (salesEl) salesEl.style.display = (val === 'Assigned to Sales') ? 'block' : 'none';
+                if (fuEl)    fuEl.style.display    = (val === 'Follow Up') ? 'block' : 'none';
+                if (svEl)    svEl.style.display    = (val === 'Site Visit Scheduled' || val === 'Site Visit Done') ? 'block' : 'none';
+                if (unitEl)  unitEl.style.display  = (val === 'Negotiation' || val === 'Converted') ? 'block' : 'none';
+                if (dvEl)    dvEl.style.display    = (val === 'Negotiation' || val === 'Converted') ? 'block' : 'none';
+                if (bkEl)    bkEl.style.display    = (val === 'Converted') ? 'block' : 'none';
+                if (drEl)    drEl.style.display    = (val === 'Dead') ? 'block' : 'none';
             });
         });
     </script>

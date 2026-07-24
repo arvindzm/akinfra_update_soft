@@ -352,18 +352,26 @@ body.sidebar-mini #sidebar ul li a i {
 
 /* Badges */
 .badge {
-    padding: 6px 12px;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 0.75rem;
-    letter-spacing: 0.02em;
+    padding: 6px 14px !important;
+    border-radius: 20px !important;
+    font-weight: 700 !important;
+    font-size: 0.78rem !important;
+    letter-spacing: 0.02em !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.08) !important;
 }
 
-.badge-new { background-color: #e0e7ff; color: var(--primary-color); }
-.badge-progress { background-color: #fef3c7; color: var(--accent-warning); }
-.badge-assigned { background-color: #e0f2fe; color: var(--accent-info); }
-.badge-converted { background-color: #d1fae5; color: var(--accent-success); }
-.badge-dead { background-color: #fee2e2; color: var(--accent-danger); }
+.badge-new { background-color: #4f46e5 !important; color: #ffffff !important; border: 1px solid #4338ca !important; }
+.badge-progress { background-color: #0284c7 !important; color: #ffffff !important; border: 1px solid #0369a1 !important; }
+.badge-followup { background-color: #d97706 !important; color: #ffffff !important; border: 1px solid #b45309 !important; }
+.badge-sv-scheduled { background-color: #7c3aed !important; color: #ffffff !important; border: 1px solid #6b21a8 !important; }
+.badge-sv-done { background-color: #0d9488 !important; color: #ffffff !important; border: 1px solid #0f766e !important; }
+.badge-negotiation { background-color: #ea580c !important; color: #ffffff !important; border: 1px solid #c2410c !important; }
+.badge-assigned { background-color: #2563eb !important; color: #ffffff !important; border: 1px solid #1d4ed8 !important; }
+.badge-converted { background-color: #059669 !important; color: #ffffff !important; border: 1px solid #047857 !important; }
+.badge-dead { background-color: #dc2626 !important; color: #ffffff !important; border: 1px solid #b91c1c !important; }
 
 /* Buttons */
 .btn {

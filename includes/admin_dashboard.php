@@ -3,19 +3,45 @@ if (!defined('PDO::ATTR_ERRMODE')) require_once 'config.php';
 
 // Handle manual lead addition
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'add_lead_manual') {
-    $name = trim($_POST['name']);
-    $phone = trim($_POST['phone']);
-    $email = trim($_POST['email']);
+    $name    = trim($_POST['name']);
+    $phone   = trim($_POST['phone']);
+    $email   = trim($_POST['email']);
+    $project = trim($_POST['project'] ?? '');
     
-    // Check for duplicates
-    $check_stmt = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE phone = ?");
-    $check_stmt->execute([$phone]);
-    if ($check_stmt->fetchColumn() > 0) {
-        $error = "A lead with this phone number already exists!";
+    // Check for duplicates (strict phone & email matching)
+    $clean_phone = preg_replace('/[^0-9]/', '', $phone);
+    $last_10 = !empty($clean_phone) ? substr($clean_phone, -10) : '';
+    
+    $check_stmt = $pdo->prepare("
+        SELECT id FROM leads 
+        WHERE (phone != '' AND REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') LIKE ?)
+           OR (email != '' AND email = ?)
+    ");
+    $check_stmt->execute(['%' . $last_10, $email]);
+    if ($check_stmt->fetch()) {
+        $error = "Duplicate Lead Blocked: A lead with phone number '{$phone}' or email '{$email}' already exists in the system!";
     } else {
-        // Auto assign to least recently assigned telecaller
-        $stmt = $pdo->query("SELECT id FROM users WHERE role = 'telecaller'");
-        $telecallers = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        $canonical_project = !empty($project) ? normalizeProjectName($project) : null;
+
+        // Auto assign to least recently assigned telecaller (filtered by project team if available)
+        $telecallers = [];
+        if (!empty($canonical_project)) {
+            $t_stmt = $pdo->prepare("SELECT user_id FROM project_assignments WHERE project_name = ?");
+            $t_stmt->execute([$canonical_project]);
+            $proj_users = $t_stmt->fetchAll(PDO::FETCH_COLUMN);
+            if (!empty($proj_users)) {
+                $placeholders = str_repeat('?,', count($proj_users) - 1) . '?';
+                $t_stmt2 = $pdo->prepare("SELECT id FROM users WHERE id IN ($placeholders) AND role = 'telecaller'");
+                $t_stmt2->execute($proj_users);
+                $telecallers = $t_stmt2->fetchAll(PDO::FETCH_COLUMN);
+            }
+        }
+
+        if (empty($telecallers)) {
+            $stmt = $pdo->query("SELECT id FROM users WHERE role = 'telecaller'");
+            $telecallers = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        }
+
         $assigned_telecaller = null;
         if (count($telecallers) > 0) {
             $placeholders = str_repeat('?,', count($telecallers) - 1) . '?';
@@ -25,9 +51,16 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
             $assigned_telecaller = $result ? $result['id'] : $telecallers[0];
         }
 
-        $insert_stmt = $pdo->prepare("INSERT INTO leads (source, name, email, phone, status, telecaller_id) VALUES ('manual', ?, ?, ?, 'New', ?)");
-        $insert_stmt->execute([$name, $email, $phone, $assigned_telecaller]);
-        $success = "Lead added manually and assigned to a telecaller.";
+        $insert_stmt = $pdo->prepare("INSERT INTO leads (source, project, name, email, phone, status, telecaller_id) VALUES ('manual', ?, ?, ?, ?, 'New', ?)");
+        $insert_stmt->execute([$canonical_project, $name, $email, $phone, $assigned_telecaller]);
+        $new_lead_id = $pdo->lastInsertId();
+
+        require_once 'mailer.php';
+        if ($assigned_telecaller) {
+            sendNewLeadNotification($pdo, $new_lead_id, $assigned_telecaller);
+        }
+
+        $success = "Lead added manually and assigned to a telecaller (Notification sent!).";
     }
 }
 
@@ -372,30 +405,61 @@ $activities = $pdo->query("
     
     <div class="col-md-4">
         <!-- Recent Activity Feed -->
-        <div class="card h-100">
-            <div class="card-body d-flex flex-column">
-                <h5 class="card-title mb-3 fw-semibold">Recent System Activity</h5>
-                <div class="flex-grow-1 overflow-auto">
+        <div class="card h-100 border-0 shadow-sm" style="border-radius: 16px;">
+            <div class="card-body p-4 d-flex flex-column">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="card-title mb-0 fw-bold text-dark">
+                        <i class="fa-solid fa-clock-rotate-left me-2 text-primary"></i>Recent System Activity
+                    </h5>
+                    <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-1 font-semibold" style="font-size: 11px;">
+                        <?php echo count($activities); ?> Logged
+                    </span>
+                </div>
+                
+                <div class="flex-grow-1 overflow-auto pe-1" >
                     <?php if (count($activities) == 0): ?>
-                        <div class="text-center py-5 text-muted small">
-                            <i class="fa-solid fa-clock-rotate-left fa-2x mb-2 text-muted opacity-50"></i>
-                            <div>No activity logged yet.</div>
+                        <div class="text-center py-5 text-muted">
+                            <i class="fa-solid fa-calendar-xmark fa-2x mb-2 text-muted opacity-50"></i>
+                            <div class="small fw-semibold">No activity logged yet.</div>
                         </div>
                     <?php else: ?>
-                        <div class="list-group list-group-flush">
-                            <?php foreach ($activities as $act): ?>
-                                <div class="list-group-item px-0 py-2 border-bottom-0">
-                                    <div class="d-flex justify-content-between mb-1">
-                                        <small class="fw-semibold">
-                                            <?php echo htmlspecialchars($act['user_name']); ?> 
-                                            <span class="badge bg-light text-dark text-capitalize border" style="font-size: 8px;"><?php echo $act['role']; ?></span>
-                                        </small>
-                                        <small class="text-muted" style="font-size: 9px;"><?php echo date('h:i A', strtotime($act['created_at'])); ?></small>
+                        <div class="timeline-activity position-relative ps-3 mt-2" style="border-left: 2px solid #eef0f7; margin-left: 8px;">
+                            <?php foreach ($activities as $act): 
+                                $time_str = '';
+                                $act_time = strtotime($act['created_at']);
+                                if (date('Y-m-d', $act_time) === date('Y-m-d')) {
+                                    $time_str = 'Today, ' . date('h:i A', $act_time);
+                                } elseif (date('Y-m-d', $act_time) === date('Y-m-d', strtotime('-1 day'))) {
+                                    $time_str = 'Yesterday, ' . date('h:i A', $act_time);
+                                } else {
+                                    $time_str = date('M d, Y h:i A', $act_time);
+                                }
+
+                                $role_bg = 'bg-info-subtle text-info border-info-subtle';
+                                if ($act['role'] === 'admin') $role_bg = 'bg-danger-subtle text-danger border-danger-subtle';
+                                if ($act['role'] === 'sales') $role_bg = 'bg-success-subtle text-success border-success-subtle';
+                            ?>
+                                <div class="mb-3 position-relative pb-2 border-bottom border-light">
+                                    <!-- Timeline Dot -->
+                                    <div style="position: absolute; left: -21px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: #4f46e5; border: 2px solid white; box-shadow: 0 0 0 2px #eef0f7;"></div>
+                                    
+                                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-1 mb-1">
+                                        <div class="d-flex align-items-center gap-2">
+                                            <span class="fw-bold text-dark small mb-0"><?php echo htmlspecialchars($act['user_name']); ?></span>
+                                            <span class="badge <?php echo $role_bg; ?> border text-uppercase" style="font-size: 9px; padding: 2px 6px;"><?php echo htmlspecialchars($act['role']); ?></span>
+                                        </div>
+                                        <span class="text-muted font-monospace" style="font-size: 11px; white-space: nowrap;">
+                                            <i class="fa-regular fa-clock me-1 opacity-75"></i><?php echo $time_str; ?>
+                                        </span>
                                     </div>
-                                    <p class="mb-0 text-muted" style="font-size: 11px;">
-                                        Note on <strong><?php echo htmlspecialchars($act['lead_name']); ?></strong>: 
-                                        "<?php echo htmlspecialchars(substr($act['note'], 0, 50)) . (strlen($act['note']) > 50 ? '...' : ''); ?>"
-                                    </p>
+                                    
+                                    <div style="font-size: 13px; line-height: 1.5;" class="mt-1">
+                                        <span class="text-muted small me-1">Lead:</span>
+                                        <strong class="text-primary fw-bold" style="font-size: 13.5px;"><?php echo htmlspecialchars($act['lead_name']); ?></strong>
+                                        <div class="text-dark mt-1" style="font-size: 12.5px;">
+                                            <?php echo htmlspecialchars($act['note']); ?>
+                                        </div>
+                                    </div>
                                 </div>
                             <?php endforeach; ?>
                         </div>
@@ -419,19 +483,33 @@ $activities = $pdo->query("
                     <input type="hidden" name="action" value="add_lead_manual">
                     
                     <div class="mb-3">
-                        <label class="form-label text-muted fw-semibold">Lead Name</label>
-                        <input type="text" name="name" class="form-control" required>
+                        <label class="form-label text-muted fw-semibold">Lead Name <span class="text-danger">*</span></label>
+                        <input type="text" name="name" class="form-control" placeholder="Full Name" required>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label text-muted fw-semibold">Phone Number</label>
-                        <input type="text" name="phone" class="form-control" required>
+                        <label class="form-label text-muted fw-semibold">Phone Number <span class="text-danger">*</span></label>
+                        <input type="tel" name="phone" class="form-control" placeholder="10-digit mobile number" required>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label text-muted fw-semibold">Email (Optional)</label>
-                        <input type="email" name="email" class="form-control">
+                        <label class="form-label text-muted fw-semibold">Email Address (Optional)</label>
+                        <input type="email" name="email" class="form-control" placeholder="name@example.com">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted fw-semibold">Project Name</label>
+                        <select name="project" class="form-select">
+                            <option value="">Select Project...</option>
+                            <?php
+                            $all_projects = $pdo->query("SELECT DISTINCT project FROM leads WHERE project IS NOT NULL AND project != '' ORDER BY project")->fetchAll(PDO::FETCH_COLUMN);
+                            if (empty($all_projects)) {
+                                $all_projects = ['Vayu Green', 'Vayu Villa Commercial', 'Golden Cryst', 'My Home Century', 'Green Valley'];
+                            }
+                            foreach ($all_projects as $pr): ?>
+                                <option value="<?php echo htmlspecialchars($pr); ?>"><?php echo htmlspecialchars($pr); ?></option>
+                            <?php endforeach; ?>
+                        </select>
                     </div>
                     <div class="alert alert-info py-2 small mb-0">
-                        <i class="fa-solid fa-circle-info me-1"></i> This lead will be automatically assigned to the next available telecaller.
+                        <i class="fa-solid fa-circle-info me-1"></i> This lead will be automatically assigned to the telecaller team member of this project.
                     </div>
                 </div>
                 <div class="modal-footer">
