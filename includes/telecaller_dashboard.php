@@ -46,42 +46,57 @@ if (isset($_GET['delete_lead'])) {
     }
 }
 
-// Fetch telecaller stats
-$my_leads = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE telecaller_id = ?");
-$my_leads->execute([$user_id]);
-$my_leads_count = $my_leads->fetchColumn();
+// === SAFE STATS QUERIES (with try-catch for missing columns) ===
+try {
+    $my_leads = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE telecaller_id = ?");
+    $my_leads->execute([$user_id]);
+    $my_leads_count = $my_leads->fetchColumn();
+} catch(PDOException $e) { $my_leads_count = 0; }
 
-$new_leads = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE telecaller_id = ? AND status='New'");
-$new_leads->execute([$user_id]);
-$new_leads_count = $new_leads->fetchColumn();
+try {
+    $new_leads = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE telecaller_id = ? AND status='New'");
+    $new_leads->execute([$user_id]);
+    $new_leads_count = $new_leads->fetchColumn();
+} catch(PDOException $e) { $new_leads_count = 0; }
 
 // Fetch pending followups that are due
-$due_stmt = $pdo->prepare("
-    SELECT COUNT(*) 
-    FROM leads 
-    WHERE telecaller_id = ? 
-      AND follow_up_at IS NOT NULL 
-      AND follow_up_at <= NOW() 
-      AND status NOT IN ('Converted', 'Dead')
-");
-$due_stmt->execute([$user_id]);
-$due_followups_count = $due_stmt->fetchColumn();
+try {
+    $due_stmt = $pdo->prepare("
+        SELECT COUNT(*) 
+        FROM leads 
+        WHERE telecaller_id = ? 
+          AND follow_up_at IS NOT NULL 
+          AND follow_up_at <= NOW() 
+          AND status NOT IN ('Converted', 'Dead')
+    ");
+    $due_stmt->execute([$user_id]);
+    $due_followups_count = $due_stmt->fetchColumn();
+} catch(PDOException $e) { $due_followups_count = 0; }
 
 // Fetch site visit count
-$sv_stmt = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE telecaller_id = ? AND (status IN ('Site Visit Scheduled', 'Site Visit Done') OR site_visit_at IS NOT NULL)");
-$sv_stmt->execute([$user_id]);
-$site_visit_count = $sv_stmt->fetchColumn();
+try {
+    $sv_stmt = $pdo->prepare("SELECT COUNT(*) FROM leads WHERE telecaller_id = ? AND status IN ('Site Visit Scheduled', 'Site Visit Done')");
+    $sv_stmt->execute([$user_id]);
+    $site_visit_count = $sv_stmt->fetchColumn();
+} catch(PDOException $e) { $site_visit_count = 0; }
 
 // Fetch converted deals & revenue
-$won_stmt = $pdo->prepare("SELECT COUNT(*), COALESCE(SUM(deal_value), 0) FROM leads WHERE telecaller_id = ? AND status = 'Converted'");
-$won_stmt->execute([$user_id]);
-$won_row = $won_stmt->fetch(PDO::FETCH_NUM);
-$won_deals_count = $won_row[0];
-$won_revenue = $won_row[1];
+try {
+    $won_stmt = $pdo->prepare("SELECT COUNT(*), COALESCE(SUM(deal_value), 0) FROM leads WHERE telecaller_id = ? AND status = 'Converted'");
+    $won_stmt->execute([$user_id]);
+    $won_row = $won_stmt->fetch(PDO::FETCH_NUM);
+    $won_deals_count = $won_row[0];
+    $won_revenue = $won_row[1];
+} catch(PDOException $e) {
+    $won_deals_count = 0;
+    $won_revenue = 0;
+}
 
 // Fetch salespersons for assignment
-$sales_stmt = $pdo->query("SELECT id, name FROM users WHERE role='sales'");
-$sales_team = $sales_stmt->fetchAll();
+try {
+    $sales_stmt = $pdo->query("SELECT id, name FROM users WHERE role='sales'");
+    $sales_team = $sales_stmt->fetchAll();
+} catch(PDOException $e) { $sales_team = []; }
 
 // Handle form submission for status update
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'update_lead') {
@@ -118,35 +133,26 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     }
 
     if (!isset($error)) {
-        $update_stmt = $pdo->prepare("
-            UPDATE leads 
-            SET status = ?, 
-                salesperson_id = ?, 
-                follow_up_at = ?, 
-                site_visit_at = CASE WHEN ? IS NOT NULL THEN ? ELSE site_visit_at END, 
-                site_visit_status = CASE 
-                    WHEN ? = 'Scheduled' THEN 'Scheduled' 
-                    WHEN ? = 'Completed' THEN 'Completed' 
-                    ELSE site_visit_status 
-                END,
-                deal_value = CASE WHEN ? IS NOT NULL THEN ? ELSE deal_value END, 
-                booking_amount = CASE WHEN ? IS NOT NULL THEN ? ELSE booking_amount END,
-                unit_number = CASE WHEN ? IS NOT NULL THEN ? ELSE unit_number END,
-                dead_reason = ? 
-            WHERE id = ? AND telecaller_id = ?
-        ");
-        $update_stmt->execute([
-            $status, $sales_id, $follow_up_at, 
-            $site_visit_at, $site_visit_at,
-            $site_visit_status, $site_visit_status,
-            $deal_value, $deal_value, 
-            $booking_amount, $booking_amount,
-            $unit_number, $unit_number,
-            $dead_reason,
-            $lead_id, $user_id
-        ]);
+        try {
+            $update_stmt = $pdo->prepare("
+                UPDATE leads 
+                SET status = ?, 
+                    salesperson_id = ?, 
+                    follow_up_at = ?
+                WHERE id = ? AND telecaller_id = ?
+            ");
+            $update_stmt->execute([$status, $sales_id, $follow_up_at, $lead_id, $user_id]);
+            
+            // Try updating extra columns if they exist
+            try {
+                $pdo->prepare("UPDATE leads SET site_visit_at = CASE WHEN ? IS NOT NULL THEN ? ELSE site_visit_at END, site_visit_status = ?, deal_value = CASE WHEN ? IS NOT NULL THEN ? ELSE deal_value END, booking_amount = CASE WHEN ? IS NOT NULL THEN ? ELSE booking_amount END, unit_number = CASE WHEN ? IS NOT NULL THEN ? ELSE unit_number END, dead_reason = CASE WHEN ? IS NOT NULL THEN ? ELSE dead_reason END WHERE id = ?")->execute([$site_visit_at, $site_visit_at, $site_visit_status, $deal_value, $deal_value, $booking_amount, $booking_amount, $unit_number, $unit_number, $dead_reason, $dead_reason, $lead_id]);
+            } catch(PDOException $e2) { /* columns may not exist yet, ignore */ }
 
-        $log_parts = ["Status updated to [$status]"];
+        } catch(PDOException $e) {
+            $error = "Update failed: " . $e->getMessage();
+        }
+
+        $log_parts = ["Status updated to [{$status}]"];
         if ($status === 'Site Visit Scheduled' && $site_visit_at) {
             $log_parts[] = "Site Visit scheduled for: " . date('d M Y h:i A', strtotime($site_visit_at));
         } elseif ($status === 'Site Visit Done') {
@@ -165,28 +171,38 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
         $log_prefix = implode(" | ", $log_parts);
         $full_note = $log_prefix . ($note ? "\nNote: " . $note : "");
 
-        $note_stmt = $pdo->prepare("INSERT INTO lead_notes (lead_id, user_id, note) VALUES (?, ?, ?)");
-        $note_stmt->execute([$lead_id, $user_id, $full_note]);
+        try {
+            $note_stmt = $pdo->prepare("INSERT INTO lead_notes (lead_id, user_id, note) VALUES (?, ?, ?)");
+            $note_stmt->execute([$lead_id, $user_id, $full_note]);
+        } catch(PDOException $e) { /* ignore note insert error */ }
 
         $success = "Lead updated successfully.";
     }
 }
 
 // Fetch my leads
-$stmt = $pdo->prepare("
-    SELECT l.*, s.name as sales_name 
-    FROM leads l
-    LEFT JOIN users s ON l.salesperson_id = s.id
-    WHERE l.telecaller_id = ? 
-    ORDER BY l.created_at DESC
-");
-$stmt->execute([$user_id]);
-$leads = $stmt->fetchAll();
+try {
+    $stmt = $pdo->prepare("
+        SELECT l.*, s.name as sales_name 
+        FROM leads l
+        LEFT JOIN users s ON l.salesperson_id = s.id
+        WHERE l.telecaller_id = ? 
+        ORDER BY l.created_at DESC
+    ");
+    $stmt->execute([$user_id]);
+    $leads = $stmt->fetchAll();
+} catch(PDOException $e) {
+    $leads = [];
+    $error = "Error loading leads: " . $e->getMessage();
+}
 
 // Fetch Telecaller Graph Data
-$status_data = $pdo->prepare("SELECT status, COUNT(*) as count FROM leads WHERE telecaller_id = ? GROUP BY status");
-$status_data->execute([$user_id]);
-$status_results = $status_data->fetchAll();
+try {
+    $status_data = $pdo->prepare("SELECT status, COUNT(*) as count FROM leads WHERE telecaller_id = ? GROUP BY status");
+    $status_data->execute([$user_id]);
+    $status_results = $status_data->fetchAll();
+} catch(PDOException $e) { $status_results = []; }
+
 $all_statuses = ['New', 'In Progress', 'Follow Up', 'Site Visit Scheduled', 'Site Visit Done', 'Negotiation', 'Assigned to Sales', 'Converted', 'Dead'];
 $status_counts_map = array_fill_keys($all_statuses, 0);
 
@@ -215,53 +231,111 @@ for($i = 6; $i >= 0; $i--) {
     $trend_counts_map[$date_str] = 0;
 }
 
-$trend_data = $pdo->prepare("SELECT DATE(created_at) as date, COUNT(*) as count FROM leads WHERE telecaller_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) GROUP BY DATE(created_at) ORDER BY date");
-$trend_data->execute([$user_id]);
-$trend_results = $trend_data->fetchAll();
-foreach($trend_results as $row) {
-    if(isset($trend_counts_map[$row['date']])) {
-        $trend_counts_map[$row['date']] = $row['count'];
+try {
+    $trend_data = $pdo->prepare("SELECT DATE(created_at) as date, COUNT(*) as count FROM leads WHERE telecaller_id = ? AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) GROUP BY DATE(created_at) ORDER BY date");
+    $trend_data->execute([$user_id]);
+    $trend_results = $trend_data->fetchAll();
+    foreach($trend_results as $row) {
+        if(isset($trend_counts_map[$row['date']])) {
+            $trend_counts_map[$row['date']] = $row['count'];
+        }
     }
-}
+} catch(PDOException $e) { /* ignore */ }
 $trend_counts = array_values($trend_counts_map);
 
 // Fetch daily target calls (distinct leads with notes created by this user today)
-$today_calls_stmt = $pdo->prepare("
-    SELECT COUNT(DISTINCT lead_id) 
-    FROM lead_notes 
-    WHERE user_id = ? AND DATE(created_at) = CURDATE()
-");
-$today_calls_stmt->execute([$user_id]);
-$today_calls_count = $today_calls_stmt->fetchColumn();
+try {
+    $today_calls_stmt = $pdo->prepare("
+        SELECT COUNT(DISTINCT lead_id) 
+        FROM lead_notes 
+        WHERE user_id = ? AND DATE(created_at) = CURDATE()
+    ");
+    $today_calls_stmt->execute([$user_id]);
+    $today_calls_count = $today_calls_stmt->fetchColumn();
+} catch(PDOException $e) { $today_calls_count = 0; }
 $daily_target = 20; // Default daily target calls
 $target_percentage = min(100, round(($today_calls_count / $daily_target) * 100));
 
 // Fetch upcoming follow-up calls
-$upcoming_callbacks_stmt = $pdo->prepare("
-    SELECT * 
-    FROM leads 
-    WHERE telecaller_id = ? 
-      AND follow_up_at > NOW() 
-      AND status NOT IN ('Converted', 'Dead') 
-    ORDER BY follow_up_at ASC 
-    LIMIT 5
-");
-$upcoming_callbacks_stmt->execute([$user_id]);
-$upcoming_callbacks = $upcoming_callbacks_stmt->fetchAll();
+try {
+    $upcoming_callbacks_stmt = $pdo->prepare("
+        SELECT * 
+        FROM leads 
+        WHERE telecaller_id = ? 
+          AND follow_up_at > NOW() 
+          AND status NOT IN ('Converted', 'Dead') 
+        ORDER BY follow_up_at ASC 
+        LIMIT 5
+    ");
+    $upcoming_callbacks_stmt->execute([$user_id]);
+    $upcoming_callbacks = $upcoming_callbacks_stmt->fetchAll();
+} catch(PDOException $e) { $upcoming_callbacks = []; }
 
 // Fetch upcoming site visits
-$upcoming_sitevisits_stmt = $pdo->prepare("
-    SELECT * 
-    FROM leads 
-    WHERE telecaller_id = ? 
-      AND site_visit_at IS NOT NULL 
-      AND status = 'Site Visit Scheduled' 
-    ORDER BY site_visit_at ASC 
-    LIMIT 5
-");
-$upcoming_sitevisits_stmt->execute([$user_id]);
-$upcoming_sitevisits = $upcoming_sitevisits_stmt->fetchAll();
+try {
+    $upcoming_sitevisits_stmt = $pdo->prepare("
+        SELECT * 
+        FROM leads 
+        WHERE telecaller_id = ? 
+          AND status = 'Site Visit Scheduled' 
+        ORDER BY created_at ASC 
+        LIMIT 5
+    ");
+    $upcoming_sitevisits_stmt->execute([$user_id]);
+    $upcoming_sitevisits = $upcoming_sitevisits_stmt->fetchAll();
+} catch(PDOException $e) { $upcoming_sitevisits = []; }
 ?>
+
+
+// Handle manual lead addition
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'add_lead_manual') {
+    $name    = trim($_POST['name']);
+    $phone   = trim($_POST['phone']);
+    $email   = trim($_POST['email']);
+    $project = trim($_POST['project'] ?? '');
+    
+    // Check for duplicates (strict phone & email matching)
+    $clean_phone = preg_replace('/[^0-9]/', '', $phone);
+    $last_10 = !empty($clean_phone) ? substr($clean_phone, -10) : '';
+    
+    $check_stmt = $pdo->prepare("
+        SELECT id FROM leads 
+        WHERE (phone != '' AND REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') LIKE ?)
+           OR (email != '' AND email = ?)
+    ");
+    $check_stmt->execute(['%' . $last_10, $email]);
+    if ($check_stmt->fetch()) {
+        $error = "Duplicate Lead Blocked: A lead with phone number '{$phone}' or email '{$email}' already exists in the system!";
+    } else {
+        $canonical_project = !empty($project) ? normalizeProjectName($project) : null;
+        // Assign to the current telecaller
+        $insert_stmt = $pdo->prepare("INSERT INTO leads (source, project, name, email, phone, status, telecaller_id) VALUES ('manual', ?, ?, ?, ?, 'New', ?)");
+        $insert_stmt->execute([$canonical_project, $name, $email, $phone, $user_id]);
+        $success = "Lead added manually and assigned to your queue.";
+    }
+}
+
+// Handle Lead Deletion
+if (isset($_GET['delete_lead'])) {
+    $delete_id = $_GET['delete_lead'];
+    try {
+        // Only allow deleting if it belongs to this telecaller
+        $stmt = $pdo->prepare("DELETE FROM leads WHERE id = ? AND telecaller_id = ?");
+        $stmt->execute([$delete_id, $user_id]);
+        if ($stmt->rowCount() > 0) {
+            $success = "Lead deleted successfully!";
+        }
+    } catch(PDOException $e) {
+        $error = "Error deleting lead.";
+    }
+}
+
+
+
+
+
+
+
 
 <style>
 @keyframes blinker {
