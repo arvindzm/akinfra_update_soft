@@ -91,4 +91,29 @@ $(document).ready(function() {
             reasonGroup.find('select').attr('required', true);
         }
     });
+
+    // Sidebar Toggle Handler for both Mobile & Desktop
+    $(document).on('click', '#sidebarToggle', function(e) {
+        e.preventDefault();
+        if (window.innerWidth <= 992) {
+            $('#sidebar').toggleClass('sidebar-open');
+            $('#sidebarOverlay, .sidebar-overlay').toggleClass('active');
+        } else {
+            $('body').toggleClass('sidebar-mini');
+        }
+    });
+
+    // Overlay click dismisses mobile sidebar
+    $(document).on('click', '#sidebarOverlay, .sidebar-overlay', function() {
+        $('#sidebar').removeClass('sidebar-open');
+        $('#sidebarOverlay, .sidebar-overlay').removeClass('active');
+    });
+
+    // Mobile nav link click dismisses sidebar
+    $(document).on('click', '#sidebar a', function() {
+        if (window.innerWidth <= 992) {
+            $('#sidebar').removeClass('sidebar-open');
+            $('#sidebarOverlay, .sidebar-overlay').removeClass('active');
+        }
+    });
 });

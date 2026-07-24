@@ -250,7 +250,7 @@ sort($all_project_names);
     <!-- Top Navbar -->
     <div class="top-navbar">
         <div class="d-flex align-items-center gap-3">
-            <button class="btn btn-light d-none d-lg-block" id="sidebarToggle">
+            <button class="btn btn-light" id="sidebarToggle" type="button" aria-label="Toggle Navigation">
                 <i class="fa-solid fa-bars"></i>
             </button>
             <h2 class="page-title">Project Assignments</h2>
@@ -486,12 +486,9 @@ sort($all_project_names);
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="assets/js/app.js"></script>
 <script>
-// Sidebar toggle
-if (window.innerWidth <= 992) document.body.classList.add('sidebar-mini');
-const sidebarToggle = document.getElementById('sidebarToggle');
-if (sidebarToggle) sidebarToggle.addEventListener('click', () => document.body.classList.toggle('sidebar-mini'));
-
 function toggleSelected(cb, lblId) {
     document.getElementById(lblId).classList.toggle('selected', cb.checked);
 }
@@ -537,10 +534,6 @@ function useCustomProject() {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-// Sidebar toggle
-if (window.innerWidth <= 992) document.body.classList.add('sidebar-mini');
-const sidebarToggle = document.getElementById('sidebarToggle');
-if (sidebarToggle) sidebarToggle.addEventListener('click', () => document.body.classList.toggle('sidebar-mini'));
 
 function toggleSelected(cb, lblId) {
     document.getElementById(lblId).classList.toggle('selected', cb.checked);

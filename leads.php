@@ -216,7 +216,7 @@ $leads = $stmt->fetchAll();
         <!-- Top Navbar -->
         <div class="top-navbar">
             <div class="d-flex align-items-center gap-3 w-100 me-3">
-                <button class="btn btn-light d-none d-lg-block" id="sidebarToggle">
+                <button class="btn btn-light" id="sidebarToggle" type="button" aria-label="Toggle Navigation">
                     <i class="fa-solid fa-bars"></i>
                 </button>
                 <h2 class="page-title me-auto mb-0">All Leads Directory</h2>
@@ -541,19 +541,6 @@ $leads = $stmt->fetchAll();
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="assets/js/app.js"></script>
-    <script>
-        // Set sidebar mini automatically on mobile load
-        if (window.innerWidth <= 992) {
-            document.body.classList.add('sidebar-mini');
-        }
 
-        // Sidebar Toggle for both mobile and desktop
-        const sidebarToggle = document.getElementById('sidebarToggle');
-        if(sidebarToggle) {
-            sidebarToggle.addEventListener('click', function() {
-                document.body.classList.toggle('sidebar-mini');
-            });
-        }
-    </script>
 </body>
 </html>

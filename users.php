@@ -193,7 +193,7 @@ $users = $stmt->fetchAll();
         <!-- Top Navbar -->
         <div class="top-navbar">
             <div class="d-flex align-items-center gap-3">
-                <button class="btn btn-light d-none d-lg-block" id="sidebarToggle">
+                <button class="btn btn-light" id="sidebarToggle" type="button" aria-label="Toggle Navigation">
                     <i class="fa-solid fa-bars"></i>
                 </button>
                 <h2 class="page-title">Team Management</h2>
@@ -280,8 +280,22 @@ $users = $stmt->fetchAll();
                                     </div>
                                 </td>
                                 <td>
-                                    <div><i class="fa-regular fa-envelope me-2 text-muted"></i><?php echo htmlspecialchars($user['email']); ?></div>
-                                    <div class="text-muted small mt-1"><i class="fa-solid fa-phone me-2"></i><?php echo htmlspecialchars($user['phone'] ?? 'N/A'); ?></div>
+                                    <div>
+                                        <a href="mailto:<?php echo htmlspecialchars($user['email']); ?>" class="text-dark text-decoration-none" title="Send Email">
+                                            <i class="fa-regular fa-envelope me-2 text-primary"></i><?php echo htmlspecialchars($user['email']); ?>
+                                        </a>
+                                    </div>
+                                    <?php if(!empty($user['phone'])): 
+                                        $u_clean_phone = preg_replace('/[^0-9]/', '', $user['phone']);
+                                    ?>
+                                    <div class="text-muted small mt-1">
+                                        <a href="tel:<?php echo $u_clean_phone; ?>" class="text-muted text-decoration-none" title="Call <?php echo htmlspecialchars($user['phone']); ?>">
+                                            <i class="fa-solid fa-phone me-2 text-primary"></i><?php echo htmlspecialchars($user['phone']); ?>
+                                        </a>
+                                    </div>
+                                    <?php else: ?>
+                                    <div class="text-muted small mt-1"><i class="fa-solid fa-phone me-2 opacity-50"></i>N/A</div>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <div class="d-flex align-items-center gap-2">
@@ -477,6 +491,8 @@ $users = $stmt->fetchAll();
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="assets/js/app.js"></script>
     <script>
         function togglePassword(inputId, iconElement) {
             const input = document.getElementById(inputId);
@@ -542,18 +558,7 @@ $users = $stmt->fetchAll();
             }
         }
 
-        // Set sidebar mini automatically on mobile load
-        if (window.innerWidth <= 992) {
-            document.body.classList.add('sidebar-mini');
-        }
 
-        // Sidebar Toggle for both mobile and desktop
-        const sidebarToggle = document.getElementById('sidebarToggle');
-        if(sidebarToggle) {
-            sidebarToggle.addEventListener('click', function() {
-                document.body.classList.toggle('sidebar-mini');
-            });
-        }
     </script>
 </body>
 </html>

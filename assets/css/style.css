@@ -459,25 +459,198 @@ body.sidebar-mini #sidebar ul li a i {
     color: var(--primary-color);
 }
 
-/* Mobile Responsiveness General Fixes */
+/* ============================================
+   COMPLETE MOBILE RESPONSIVE STYLES
+   ============================================ */
+
+/* Sidebar toggle overlay on mobile */
+#sidebarOverlay, .sidebar-overlay, #sidebar-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: rgba(15, 23, 42, 0.6);
+    z-index: 1040;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+#sidebarOverlay.active, .sidebar-overlay.active, #sidebar-overlay.active { display: block; }
+
+/* ---- TABLET & MOBILE (992px and below) ---- */
 @media (max-width: 992px) {
+
+    #sidebar,
+    body.sidebar-mini #sidebar {
+        left: -260px !important;
+        width: 260px !important;
+        z-index: 1050;
+        transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    #sidebar.sidebar-open,
+    body.sidebar-mini #sidebar.sidebar-open {
+        left: 0 !important;
+    }
+    #sidebar .nav-text,
+    #sidebar .sidebar-header span,
+    body.sidebar-mini #sidebar .nav-text,
+    body.sidebar-mini #sidebar .sidebar-header span {
+        opacity: 1 !important;
+        display: inline !important;
+    }
+    #sidebar .sidebar-header,
+    body.sidebar-mini #sidebar .sidebar-header {
+        padding: 24px 30px !important;
+        justify-content: flex-start !important;
+    }
+    #sidebar ul li a,
+    body.sidebar-mini #sidebar ul li a {
+        justify-content: flex-start !important;
+        padding: 14px 20px !important;
+    }
+    #sidebar ul li a i,
+    body.sidebar-mini #sidebar ul li a i {
+        margin-right: 12px !important;
+        font-size: 1.1rem !important;
+    }
+
+    #content,
+    body.sidebar-mini #content {
+        margin-left: 0 !important;
+        width: 100% !important;
+    }
+
     .content-body {
         padding: 16px;
     }
     .top-navbar {
-        padding: 16px;
+        padding: 12px 16px;
     }
-    
-    .metric-card {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 16px;
-    }
-    .metric-icon {
-        align-self: flex-start;
+    .page-title {
+        font-size: 1.15rem !important;
     }
 
-    .table-responsive {
-        border: 0;
+    .metric-card {
+        flex-direction: row;
+        align-items: center;
+        gap: 12px;
+        padding: 18px;
     }
+    .metric-icon {
+        width: 50px;
+        height: 50px;
+        font-size: 20px;
+    }
+
+    .table-responsive { 
+        border: 0;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .modal-body { padding: 20px; }
+    .modal-header { padding: 16px 20px; }
+    .modal-footer { padding: 16px 20px; }
+}
+
+/* ---- MOBILE (768px and below) ---- */
+@media (max-width: 768px) {
+
+    /* Navbar */
+    .top-navbar {
+        padding: 10px 14px;
+    }
+    .top-navbar .user-avatar {
+        width: 34px;
+        height: 34px;
+        font-size: 14px;
+    }
+    .top-navbar h5, .top-navbar h4 {
+        font-size: 16px !important;
+    }
+    .top-navbar .user-info { display: none; }
+
+    /* Content */
+    .content-body { padding: 12px; }
+
+    /* Metric cards — 2 per row */
+    .metric-card {
+        flex-direction: column;
+        padding: 14px;
+        gap: 10px;
+        border-radius: 14px;
+    }
+    .metric-card h6 { font-size: 12px; }
+    .metric-card h2 { font-size: 24px; }
+    .metric-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
+    }
+
+    /* Cards */
+    .card { border-radius: 14px; }
+    .card-body { padding: 14px; }
+    .table-header { padding: 14px !important; }
+    .table-header h5 { font-size: 14px !important; }
+
+    /* Tables */
+    .table th, .table td { font-size: 12px; padding: 8px 6px; }
+    .table th { white-space: nowrap; }
+
+    /* Buttons compact */
+    .btn-sm { padding: 4px 8px; font-size: 11px; }
+    .btn { border-radius: 10px; }
+
+    /* Badges */
+    .badge { font-size: 10px; padding: 4px 7px; }
+
+    /* Modals — full width on mobile */
+    .modal-dialog {
+        margin: 8px;
+        max-width: calc(100% - 16px) !important;
+    }
+    .modal-content { border-radius: 16px; }
+    .modal-body { padding: 16px; }
+    .modal-header { padding: 14px 16px; }
+    .modal-footer { padding: 14px 16px; }
+
+    /* Form controls */
+    .form-control, .form-select {
+        padding: 10px 12px;
+        font-size: 13px;
+        border-radius: 10px;
+    }
+
+    /* Activity feed */
+    .activity-timeline { padding: 12px; }
+
+    /* Charts — smaller on mobile */
+    canvas { max-height: 200px !important; }
+
+    /* Row adjustments */
+    .row.g-4 { --bs-gutter-x: 0.75rem; --bs-gutter-y: 0.75rem; }
+
+    /* Telecaller dashboard specific */
+    .progress-ring-container { transform: scale(0.85); }
+
+    /* Hide less important columns already handled by d-none classes */
+    .leads-table-actions a.btn { padding: 3px 7px; }
+}
+
+/* ---- SMALL MOBILE (480px and below) ---- */
+@media (max-width: 480px) {
+
+    .content-body { padding: 8px; }
+
+    .metric-card { padding: 12px; }
+    .metric-card h2 { font-size: 20px; }
+
+    .top-navbar { padding: 8px 12px; }
+
+    /* Full-width buttons on very small screens */
+    .table-header .btn { font-size: 11px; padding: 6px 10px; }
+
+    .modal-dialog { margin: 4px; max-width: calc(100% - 8px) !important; }
+
+    /* Stacked action buttons */
+    .d-flex.gap-1 { gap: 4px !important; }
 }

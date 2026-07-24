@@ -352,54 +352,73 @@ $activities = $pdo->query("
                 </div>
             </div>
             <div class="table-responsive">
-                <table class="table table-hover">
+                <table class="table table-hover align-middle">
                     <thead>
                         <tr>
-                            <th>Lead Name</th>
-                            <th>Source</th>
-                            <th>Telecaller</th>
-                            <th>Salesperson</th>
-                            <th>Status</th>
+                            <th>Lead Details</th>
+                            <th class="d-none d-md-table-cell">Source</th>
+                            <th class="d-none d-lg-table-cell">Telecaller</th>
+                            <th class="d-none d-lg-table-cell">Status</th>
                             <th>Date</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach($recent_leads as $lead): ?>
+                        <?php foreach($recent_leads as $lead): 
+                            $badge_class = 'bg-secondary';
+                            switch($lead['status']) {
+                                case 'New': $badge_class = 'badge-new'; break;
+                                case 'In Progress': $badge_class = 'badge-progress'; break;
+                                case 'Assigned to Sales': $badge_class = 'badge-assigned'; break;
+                                case 'Converted': $badge_class = 'badge-converted'; break;
+                                case 'Dead': $badge_class = 'badge-dead'; break;
+                            }
+                            $clean_phone = preg_replace('/[^0-9]/', '', $lead['phone']);
+                            $wa_phone = (strlen($clean_phone) == 10) ? '91' . $clean_phone : $clean_phone;
+                        ?>
                         <tr>
                             <td>
-                                <div class="fw-semibold"><?php echo htmlspecialchars($lead['name']); ?></div>
-                                <div class="text-muted small d-flex align-items-center gap-1">
-                                    <?php echo htmlspecialchars($lead['phone']); ?>
-                                    <a href="https://api.whatsapp.com/send?phone=<?php echo preg_replace('/[^0-9]/', '', $lead['phone']); ?>&text=Hello%20<?php echo urlencode($lead['name']); ?>," target="_blank" class="text-success" title="Message on WhatsApp">
+                                <div class="fw-semibold text-dark" style="font-size:13.5px;"><?php echo htmlspecialchars($lead['name']); ?></div>
+                                <div class="text-muted small d-flex align-items-center gap-1 mt-1 flex-wrap">
+                                    <a href="tel:<?php echo $clean_phone; ?>" class="text-dark fw-semibold text-decoration-none" title="Call <?php echo htmlspecialchars($lead['phone']); ?>">
+                                        <i class="fa-solid fa-phone text-primary me-1"></i><?php echo htmlspecialchars($lead['phone']); ?>
+                                    </a>
+                                    <?php if(!empty($clean_phone)): ?>
+                                    <a href="https://api.whatsapp.com/send?phone=<?php echo $wa_phone; ?>&text=Hello%20<?php echo urlencode($lead['name']); ?>," target="_blank" class="text-success ms-1 fs-6" title="Chat on WhatsApp">
                                         <i class="fa-brands fa-whatsapp fw-bold"></i>
                                     </a>
+                                    <?php endif; ?>
+                                </div>
+                                <?php if(!empty($lead['email'])): ?>
+                                <div class="small mt-1">
+                                    <a href="mailto:<?php echo htmlspecialchars($lead['email']); ?>" class="text-muted text-decoration-none" title="Send Email">
+                                        <i class="fa-solid fa-envelope me-1 text-secondary"></i><?php echo htmlspecialchars($lead['email']); ?>
+                                    </a>
+                                </div>
+                                <?php endif; ?>
+                                <div class="d-md-none mt-1">
+                                    <span class="badge <?php echo $badge_class; ?> me-1"><?php echo $lead['status']; ?></span>
+                                    <span class="text-muted small"><?php echo htmlspecialchars($lead['telecaller_name'] ?? 'Unassigned'); ?></span>
                                 </div>
                             </td>
-                            <td><span class="text-capitalize text-muted"><i class="fa-brands fa-<?php echo strtolower($lead['source']); ?> me-1"></i> <?php echo htmlspecialchars($lead['source']); ?></span></td>
-                            <td><?php echo htmlspecialchars($lead['telecaller_name'] ?? 'Unassigned'); ?></td>
-                            <td><?php echo htmlspecialchars($lead['sales_name'] ?? 'Unassigned'); ?></td>
-                            <td>
-                                <?php 
-                                    $badge_class = 'bg-secondary';
-                                    switch($lead['status']) {
-                                        case 'New': $badge_class = 'badge-new'; break;
-                                        case 'In Progress': $badge_class = 'badge-progress'; break;
-                                        case 'Assigned to Sales': $badge_class = 'badge-assigned'; break;
-                                        case 'Converted': $badge_class = 'badge-converted'; break;
-                                        case 'Dead': $badge_class = 'badge-dead'; break;
-                                    }
-                                ?>
+                            <td class="d-none d-md-table-cell">
+                                <span class="text-muted small"><?php echo htmlspecialchars($lead['source']); ?></span>
+                            </td>
+                            <td class="d-none d-lg-table-cell">
+                                <span class="small"><?php echo htmlspecialchars($lead['telecaller_name'] ?? 'Unassigned'); ?></span>
+                            </td>
+                            <td class="d-none d-lg-table-cell">
                                 <span class="badge <?php echo $badge_class; ?>"><?php echo $lead['status']; ?></span>
                             </td>
                             <td class="text-muted small"><?php echo date('M d, Y', strtotime($lead['created_at'])); ?></td>
                         </tr>
                         <?php endforeach; ?>
                         <?php if(count($recent_leads) == 0): ?>
-                        <tr><td colspan="6" class="text-center py-4 text-muted">No leads found.</td></tr>
+                        <tr><td colspan="5" class="text-center py-4 text-muted">No leads found.</td></tr>
                         <?php endif; ?>
                     </tbody>
                 </table>
             </div>
+
         </div>
     </div>
     

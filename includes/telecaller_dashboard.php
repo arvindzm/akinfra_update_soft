@@ -404,8 +404,14 @@ try {
                                         <div>
                                             <div class="fw-semibold small"><?php echo htmlspecialchars($callback['name']); ?></div>
                                             <div class="text-muted" style="font-size: 11px;">
-                                                <i class="fa-solid fa-phone me-1"></i><?php echo htmlspecialchars($callback['phone']); ?>
-                                                <a href="https://api.whatsapp.com/send?phone=<?php echo preg_replace('/[^0-9]/', '', $callback['phone']); ?>" target="_blank" class="text-success ms-1"><i class="fa-brands fa-whatsapp"></i></a>
+                                                <?php 
+                                                    $cb_clean_phone = preg_replace('/[^0-9]/', '', $callback['phone']);
+                                                    $cb_wa_phone = (strlen($cb_clean_phone) == 10) ? '91' . $cb_clean_phone : $cb_clean_phone;
+                                                ?>
+                                                <a href="tel:<?php echo $cb_clean_phone; ?>" class="text-dark fw-semibold text-decoration-none" title="Call <?php echo htmlspecialchars($callback['phone']); ?>">
+                                                    <i class="fa-solid fa-phone text-primary me-1"></i><?php echo htmlspecialchars($callback['phone']); ?>
+                                                </a>
+                                                <a href="https://api.whatsapp.com/send?phone=<?php echo $cb_wa_phone; ?>" target="_blank" class="text-success ms-1" title="Chat on WhatsApp"><i class="fa-brands fa-whatsapp"></i></a>
                                             </div>
                                         </div>
                                         <span class="badge bg-light text-dark border small" style="font-size: 10px;">
@@ -440,8 +446,14 @@ try {
                                         <div>
                                             <div class="fw-semibold small"><?php echo htmlspecialchars($visit['name']); ?></div>
                                             <div class="text-muted" style="font-size: 11px;">
-                                                <i class="fa-solid fa-phone me-1"></i><?php echo htmlspecialchars($visit['phone']); ?>
-                                                <a href="https://api.whatsapp.com/send?phone=<?php echo preg_replace('/[^0-9]/', '', $visit['phone']); ?>" target="_blank" class="text-success ms-1"><i class="fa-brands fa-whatsapp"></i></a>
+                                                <?php 
+                                                    $sv_clean_phone = preg_replace('/[^0-9]/', '', $visit['phone']);
+                                                    $sv_wa_phone = (strlen($sv_clean_phone) == 10) ? '91' . $sv_clean_phone : $sv_clean_phone;
+                                                ?>
+                                                <a href="tel:<?php echo $sv_clean_phone; ?>" class="text-dark fw-semibold text-decoration-none" title="Call <?php echo htmlspecialchars($visit['phone']); ?>">
+                                                    <i class="fa-solid fa-phone text-primary me-1"></i><?php echo htmlspecialchars($visit['phone']); ?>
+                                                </a>
+                                                <a href="https://api.whatsapp.com/send?phone=<?php echo $sv_wa_phone; ?>" target="_blank" class="text-success ms-1" title="Chat on WhatsApp"><i class="fa-brands fa-whatsapp"></i></a>
                                             </div>
                                         </div>
                                         <span class="badge text-purple border small" style="font-size: 10px; background: #f3e8ff; color: #9333ea;">

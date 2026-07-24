@@ -220,6 +220,8 @@ $role = $user['role'];
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="assets/js/app.js"></script>
     <script>
         function togglePassword(inputId, iconElement) {
             const input = document.getElementById(inputId);
@@ -234,18 +236,7 @@ $role = $user['role'];
             }
         }
 
-        // Set sidebar mini automatically on mobile load
-        if (window.innerWidth <= 992) {
-            document.body.classList.add('sidebar-mini');
-        }
 
-        // Sidebar Toggle for both mobile and desktop
-        const sidebarToggle = document.getElementById('sidebarToggle');
-        if(sidebarToggle) {
-            sidebarToggle.addEventListener('click', function() {
-                document.body.classList.toggle('sidebar-mini');
-            });
-        }
     </script>
 </body>
 </html>

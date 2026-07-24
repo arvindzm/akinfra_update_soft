@@ -77,7 +77,7 @@ $role = $user['role'];
         <!-- Top Navbar -->
         <div class="top-navbar">
             <div class="d-flex align-items-center gap-3">
-                <button class="btn btn-light d-none d-lg-block" id="sidebarToggle">
+                <button class="btn btn-light" id="sidebarToggle" type="button" aria-label="Toggle Navigation">
                     <i class="fa-solid fa-bars"></i>
                 </button>
                 <h2 class="page-title">
@@ -155,19 +155,6 @@ $role = $user['role'];
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- Custom JS -->
     <script src="assets/js/app.js"></script>
-    <script>
-        // Set sidebar mini automatically on mobile load
-        if (window.innerWidth <= 992) {
-            document.body.classList.add('sidebar-mini');
-        }
 
-        // Sidebar Toggle for both mobile and desktop
-        const sidebarToggle = document.getElementById('sidebarToggle');
-        if(sidebarToggle) {
-            sidebarToggle.addEventListener('click', function() {
-                document.body.classList.toggle('sidebar-mini');
-            });
-        }
-    </script>
 </body>
 </html>

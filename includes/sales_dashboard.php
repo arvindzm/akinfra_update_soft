@@ -255,15 +255,24 @@ if (count($lost_counts) == 0) {
                         <div class="text-muted small">Source: <?php echo htmlspecialchars($lead['source']); ?></div>
                     </td>
                     <td>
-                        <div class="d-flex align-items-center gap-1">
-                            <i class="fa-solid fa-phone text-muted me-2"></i>
-                            <?php echo htmlspecialchars($lead['phone']); ?>
-                            <a href="https://api.whatsapp.com/send?phone=<?php echo preg_replace('/[^0-9]/', '', $lead['phone']); ?>&text=Hello%20<?php echo urlencode($lead['name']); ?>," target="_blank" class="text-success" title="Message on WhatsApp">
+                        <?php 
+                            $s_clean_phone = preg_replace('/[^0-9]/', '', $lead['phone']);
+                            $s_wa_phone = (strlen($s_clean_phone) == 10) ? '91' . $s_clean_phone : $s_clean_phone;
+                        ?>
+                        <div class="d-flex align-items-center gap-1 flex-wrap">
+                            <a href="tel:<?php echo $s_clean_phone; ?>" class="text-dark fw-semibold text-decoration-none" title="Call <?php echo htmlspecialchars($lead['phone']); ?>">
+                                <i class="fa-solid fa-phone text-primary me-1"></i><?php echo htmlspecialchars($lead['phone']); ?>
+                            </a>
+                            <a href="https://api.whatsapp.com/send?phone=<?php echo $s_wa_phone; ?>&text=Hello%20<?php echo urlencode($lead['name']); ?>," target="_blank" class="text-success ms-1 fs-6" title="Message on WhatsApp">
                                 <i class="fa-brands fa-whatsapp fw-bold"></i>
                             </a>
                         </div>
-                        <?php if($lead['email']): ?>
-                        <div class="text-muted small"><i class="fa-solid fa-envelope me-2"></i><?php echo htmlspecialchars($lead['email']); ?></div>
+                        <?php if(!empty($lead['email'])): ?>
+                        <div class="small mt-1">
+                            <a href="mailto:<?php echo htmlspecialchars($lead['email']); ?>" class="text-muted text-decoration-none" title="Send Email">
+                                <i class="fa-solid fa-envelope me-1 text-secondary"></i><?php echo htmlspecialchars($lead['email']); ?>
+                            </a>
+                        </div>
                         <?php endif; ?>
                     </td>
                     <td>
