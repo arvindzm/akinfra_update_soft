@@ -287,56 +287,6 @@ try {
 ?>
 
 
-// Handle manual lead addition
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['action'] == 'add_lead_manual') {
-    $name    = trim($_POST['name']);
-    $phone   = trim($_POST['phone']);
-    $email   = trim($_POST['email']);
-    $project = trim($_POST['project'] ?? '');
-    
-    // Check for duplicates (strict phone & email matching)
-    $clean_phone = preg_replace('/[^0-9]/', '', $phone);
-    $last_10 = !empty($clean_phone) ? substr($clean_phone, -10) : '';
-    
-    $check_stmt = $pdo->prepare("
-        SELECT id FROM leads 
-        WHERE (phone != '' AND REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') LIKE ?)
-           OR (email != '' AND email = ?)
-    ");
-    $check_stmt->execute(['%' . $last_10, $email]);
-    if ($check_stmt->fetch()) {
-        $error = "Duplicate Lead Blocked: A lead with phone number '{$phone}' or email '{$email}' already exists in the system!";
-    } else {
-        $canonical_project = !empty($project) ? normalizeProjectName($project) : null;
-        // Assign to the current telecaller
-        $insert_stmt = $pdo->prepare("INSERT INTO leads (source, project, name, email, phone, status, telecaller_id) VALUES ('manual', ?, ?, ?, ?, 'New', ?)");
-        $insert_stmt->execute([$canonical_project, $name, $email, $phone, $user_id]);
-        $success = "Lead added manually and assigned to your queue.";
-    }
-}
-
-// Handle Lead Deletion
-if (isset($_GET['delete_lead'])) {
-    $delete_id = $_GET['delete_lead'];
-    try {
-        // Only allow deleting if it belongs to this telecaller
-        $stmt = $pdo->prepare("DELETE FROM leads WHERE id = ? AND telecaller_id = ?");
-        $stmt->execute([$delete_id, $user_id]);
-        if ($stmt->rowCount() > 0) {
-            $success = "Lead deleted successfully!";
-        }
-    } catch(PDOException $e) {
-        $error = "Error deleting lead.";
-    }
-}
-
-
-
-
-
-
-
-
 <style>
 @keyframes blinker {
     50% { opacity: 0.3; }
