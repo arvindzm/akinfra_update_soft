@@ -1,110 +1,107 @@
 <?php
 /**
- * LIVE SERVER DEBUG SCRIPT
- * Upload this file to your live server root: https://yoursite.com/debug_live.php
- * Visit in browser to see all errors and project assignment info
- * DELETE THIS FILE AFTER DEBUGGING!
+ * LIVE SERVER SYNC & FIX SCRIPT
+ * Upload to: leadscrm.buildupproperty.com/debug_live.php
+ * DELETE AFTER USE!
  */
-
-// Turn on all errors
 ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
 error_reporting(E_ALL);
-
 session_start();
 require_once 'includes/config.php';
 
-echo "<pre style='font-family:monospace; font-size:13px; padding:20px;'>";
-echo "<h2>🔍 CRM Live Server Debug Report</h2>";
-echo "<hr>";
+echo "<pre style='font-family:monospace; font-size:13px; padding:20px; background:#f8f9fa;'>";
+echo "<h2>🔧 CRM Live Server SYNC & FIX Report</h2><hr>";
 
-// 1. All users in DB
-echo "<h3>1. ALL USERS IN DATABASE</h3>";
-$users = $pdo->query("SELECT id, name, email, role FROM users ORDER BY role, name ASC")->fetchAll();
-foreach ($users as $u) {
-    echo "  ID:{$u['id']} | Role:{$u['role']} | Name:{$u['name']} | Email:{$u['email']}\n";
-}
-
-// 2. Project Assignments in DB
-echo "\n<h3>2. PROJECT_ASSIGNMENTS TABLE</h3>";
-$pas = $pdo->query("
-    SELECT pa.project_name, u.name, u.id as user_id, u.role 
-    FROM project_assignments pa 
-    JOIN users u ON u.id = pa.user_id 
-    ORDER BY pa.project_name, u.name
-")->fetchAll();
-if (empty($pas)) {
-    echo "  ⚠️ NO PROJECT ASSIGNMENTS FOUND IN DATABASE!\n";
-} else {
-    foreach ($pas as $p) {
-        echo "  Project: {$p['project_name']} -> {$p['name']} (ID:{$p['user_id']}, Role:{$p['role']})\n";
-    }
-}
-
-// 3. project_mappings.json file
-echo "\n<h3>3. PROJECT_MAPPINGS.JSON CONTENT</h3>";
+// 1. Load JSON
 $mf = __DIR__ . '/includes/project_mappings.json';
-if (file_exists($mf)) {
-    $json = json_decode(file_get_contents($mf), true);
-    foreach ($json as $proj => $members) {
-        echo "  {$proj}: " . implode(', ', $members) . "\n";
-    }
-} else {
-    echo "  ⚠️ project_mappings.json FILE NOT FOUND!\n";
+$defined_projects = json_decode(file_get_contents($mf), true) ?: [];
+
+echo "<h3>1. PROJECT_MAPPINGS.JSON</h3>";
+foreach ($defined_projects as $proj => $members) {
+    echo "  $proj: " . implode(', ', $members) . "\n";
 }
 
-// 4. Sync Now
-echo "\n<h3>4. SYNCING JSON → DATABASE NOW...</h3>";
-if (file_exists($mf)) {
-    $defined_projects = json_decode(file_get_contents($mf), true) ?: [];
-    $all_users_map = $pdo->query("SELECT id, name FROM users WHERE role IN ('telecaller','sales')")->fetchAll();
-    $name_map = [];
-    foreach ($all_users_map as $u) {
-        $name_map[strtolower(trim($u['name']))] = $u['id'];
-    }
+// 2. Build name map from DB
+$all_users = $pdo->query("SELECT id, name, role FROM users WHERE role IN ('telecaller','sales')")->fetchAll();
+$name_map = [];
+foreach ($all_users as $u) {
+    $name_map[strtolower(trim($u['name']))] = ['id' => $u['id'], 'name' => $u['name']];
+}
 
-    echo "  Available telecaller name map:\n";
-    foreach ($name_map as $k => $v) {
-        echo "    '{$k}' => user_id {$v}\n";
-    }
-
-    foreach ($defined_projects as $proj => $members) {
-        $pdo->prepare("DELETE FROM project_assignments WHERE project_name = ?")->execute([$proj]);
-        $ins = $pdo->prepare("INSERT IGNORE INTO project_assignments (project_name, user_id) VALUES (?, ?)");
-        $synced = [];
-        $missing = [];
-        foreach ($members as $member_name) {
-            $key = strtolower(trim($member_name));
-            if (isset($name_map[$key])) {
-                $ins->execute([$proj, $name_map[$key]]);
-                $synced[] = $member_name;
-            } else {
-                $missing[] = $member_name;
-            }
-        }
-        echo "  {$proj}:\n";
-        echo "    ✅ Synced: " . (empty($synced) ? "NONE" : implode(', ', $synced)) . "\n";
-        if (!empty($missing)) {
-            echo "    ⚠️  NOT FOUND IN USERS TABLE: " . implode(', ', $missing) . "\n";
+echo "\n<h3>2. SYNCING project_assignments TABLE</h3>";
+foreach ($defined_projects as $proj => $members) {
+    $pdo->prepare("DELETE FROM project_assignments WHERE project_name = ?")->execute([$proj]);
+    $ins = $pdo->prepare("INSERT IGNORE INTO project_assignments (project_name, user_id) VALUES (?, ?)");
+    $synced = []; $missing = [];
+    foreach ($members as $member_name) {
+        $key = strtolower(trim($member_name));
+        if (isset($name_map[$key])) {
+            $ins->execute([$proj, $name_map[$key]['id']]);
+            $synced[] = $member_name . " (ID:" . $name_map[$key]['id'] . ")";
+        } else {
+            $missing[] = $member_name;
         }
     }
-    echo "\n  ✅ SYNC COMPLETE!\n";
+    echo "  <b>$proj</b>:\n";
+    echo "    ✅ Synced: " . (empty($synced) ? "NONE" : implode(', ', $synced)) . "\n";
+    if (!empty($missing)) echo "    ⚠️  NOT FOUND: " . implode(', ', $missing) . "\n";
 }
 
-// 5. Recent lead assignments
-echo "\n<h3>5. RECENT 20 LEAD ASSIGNMENTS</h3>";
-$leads = $pdo->query("
-    SELECT l.id, l.name as lead_name, l.project, l.source, u.name as telecaller, l.status, l.created_at
-    FROM leads l
-    LEFT JOIN users u ON u.id = l.telecaller_id
-    ORDER BY l.created_at DESC
-    LIMIT 20
-")->fetchAll();
-foreach ($leads as $l) {
-    $tc = $l['telecaller'] ?? 'UNASSIGNED';
-    echo "  Lead: {$l['lead_name']} | Project: {$l['project']} | Telecaller: {$tc} | Status: {$l['status']}\n";
+// 3. Fix wrongly assigned NEW leads
+echo "\n<h3>3. FIXING WRONGLY ASSIGNED NEW LEADS</h3>";
+
+// Golden Cryst - only Rishi (14) and Samiksha (18) allowed
+$gc_allowed = [14, 18]; // Rishi Prajapati, Samiksha Kamble
+$gc_stmt = $pdo->query("SELECT id, name, telecaller_id FROM leads WHERE project = 'Golden Cryst' AND status = 'New' AND id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)");
+$gc_leads = $gc_stmt->fetchAll();
+$gc_fixed = 0;
+$gc_counter = 0;
+foreach ($gc_leads as $lead) {
+    if (!in_array($lead['telecaller_id'], $gc_allowed)) {
+        $new_tc = $gc_allowed[$gc_counter % count($gc_allowed)];
+        $pdo->prepare("UPDATE leads SET telecaller_id = ? WHERE id = ?")->execute([$new_tc, $lead['id']]);
+        echo "  Fixed (Golden Cryst): '{$lead['name']}' reassigned to user_id $new_tc\n";
+        $gc_counter++; $gc_fixed++;
+    }
+}
+if ($gc_fixed == 0) echo "  Golden Cryst: No NEW unworked leads need fixing.\n";
+
+// My Home Century - only Rishi (14) and Samiksha (18) allowed
+$mhc_stmt = $pdo->query("SELECT id, name, telecaller_id FROM leads WHERE project = 'My Home Century' AND status = 'New' AND id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)");
+$mhc_leads = $mhc_stmt->fetchAll();
+$mhc_fixed = 0;
+$mhc_counter = 0;
+foreach ($mhc_leads as $lead) {
+    if (!in_array($lead['telecaller_id'], [14, 18])) {
+        $new_tc = [14, 18][$mhc_counter % 2];
+        $pdo->prepare("UPDATE leads SET telecaller_id = ? WHERE id = ?")->execute([$new_tc, $lead['id']]);
+        echo "  Fixed (My Home Century): '{$lead['name']}' reassigned to user_id $new_tc\n";
+        $mhc_counter++; $mhc_fixed++;
+    }
+}
+if ($mhc_fixed == 0) echo "  My Home Century: No NEW unworked leads need fixing.\n";
+
+// Green Valley - Rishi (14) and Samiksha (18) should NOT have Green Valley leads
+$gv_team = [11, 10, 12, 15, 17, 19]; // Mansi, Mrunal, Akshada, Arvind, Abhay, Shiva
+$gv_stmt = $pdo->query("SELECT id, name, telecaller_id FROM leads WHERE project = 'Green Valley' AND status = 'New' AND id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)");
+$gv_leads = $gv_stmt->fetchAll();
+$gv_fixed = 0; $gv_counter = 0;
+foreach ($gv_leads as $lead) {
+    if (in_array($lead['telecaller_id'], [14, 18])) { // Wrongly assigned to Rishi/Samiksha
+        $new_tc = $gv_team[$gv_counter % count($gv_team)];
+        $pdo->prepare("UPDATE leads SET telecaller_id = ? WHERE id = ?")->execute([$new_tc, $lead['id']]);
+        echo "  Fixed (Green Valley): '{$lead['name']}' moved from Rishi/Samiksha to user_id $new_tc\n";
+        $gv_counter++; $gv_fixed++;
+    }
+}
+if ($gv_fixed == 0) echo "  Green Valley: No NEW unworked leads need fixing.\n";
+
+// 4. Verify project_assignments
+echo "\n<h3>4. FINAL project_assignments TABLE</h3>";
+$pas = $pdo->query("SELECT pa.project_name, u.name, u.id FROM project_assignments pa JOIN users u ON u.id = pa.user_id ORDER BY pa.project_name, u.name")->fetchAll();
+foreach ($pas as $p) {
+    echo "  {$p['project_name']} -> {$p['name']} (ID:{$p['id']})\n";
 }
 
-echo "\n<hr><strong>✅ Debug complete. DELETE THIS FILE NOW!</strong>";
-echo "</pre>";
+echo "\n<hr><b style='color:green'>✅ All done! Please DELETE this file now.</b></pre>";
 ?>
