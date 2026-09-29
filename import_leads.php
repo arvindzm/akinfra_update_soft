@@ -101,7 +101,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                     $header_row = $rows[0];
                     $cols = [
                         'date' => null, 'leads' => null, 'lead_code' => null, 'number' => null,
-                        'influencer' => null, 'city' => null, 'name' => null, 'contact' => null,
+                        'influencer' => null, 'city' => null, 'name' => null, 'first_name' => null, 'last_name' => null,
+                        'contact' => null, 'email' => null, 'platform' => null, 'ad_name' => null, 'form_name' => null,
                         'telecaller' => null, 'status' => null, 'remark1' => null, 'site_loc' => null,
                         'followup1' => null, 'remark2' => null, 'followup2' => null, 'remark3' => null,
                         'visit_status' => null, 'visit_date' => null, 'visit_done' => null, 'visit_remark' => null,
@@ -110,33 +111,123 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                     ];
 
                     foreach ($header_row as $idx => $h_val) {
-                        $col = strtoupper(trim((string)$h_val));
-                        if ($col === 'DATE' && $cols['date'] === null) $cols['date'] = $idx;
-                        elseif (in_array($col, ['LEADS', 'SOURCE', 'PROJECT'])) $cols['leads'] = $idx;
-                        elseif (in_array($col, ['LEAD CODE', 'CODE'])) $cols['lead_code'] = $idx;
-                        elseif (in_array($col, ['NUMBER', 'SERIAL NO', 'SERIAL NO.', 'SERIAL NUMBER', 'SR NO', 'SR. NO.', 'S.NO.', 'REF #', 'REF NO']) && $cols['number'] === null) $cols['number'] = $idx;
-                        elseif (in_array($col, ['INFLUENCER', 'BROKER', 'CP', 'CAMPAIGN', 'CAMPAIGN NAME', 'CAMPAIGN_NAME', 'CHAMPING', 'CHAMPING NAME', 'CHAMPING_NAME', 'UTM_CAMPAIGN'])) $cols['influencer'] = $idx;
-                        elseif ($col === 'CITY') $cols['city'] = $idx;
-                        elseif (in_array($col, ['NAME', 'FULL NAME', 'CLIENT NAME', 'CUSTOMER NAME'])) $cols['name'] = $idx;
-                        elseif (in_array($col, ['CONTACT', 'PHONE', 'MOBILE', 'PHONE NUMBER', 'MOBILE NUMBER'])) $cols['contact'] = $idx;
-                        elseif ($col === 'TELECALLER') $cols['telecaller'] = $idx;
-                        elseif (in_array($col, ['STATUS', 'STATUS-1', 'STATUS 1'])) $cols['status'] = $idx;
-                        elseif (in_array($col, ['REMARK 1', 'REMARK-1', 'REMARK1'])) $cols['remark1'] = $idx;
-                        elseif (in_array($col, ['SITE LOCATION', 'LOCATION'])) $cols['site_loc'] = $idx;
-                        elseif (in_array($col, ['FOLLOWUP 1', 'FOLLOWUP-1', 'FOLLOWUP1'])) $cols['followup1'] = $idx;
-                        elseif (in_array($col, ['REMARK 2', 'REMARK-2', 'REMARK2'])) $cols['remark2'] = $idx;
-                        elseif (in_array($col, ['FOLLOWUP 2', 'FOLLOWUP-2', 'FOLLOWUP2'])) $cols['followup2'] = $idx;
-                        elseif (in_array($col, ['REMARK 3', 'REMARK-3', 'REMARK3'])) $cols['remark3'] = $idx;
-                        elseif (in_array($col, ['VISIT', 'SITE VISIT'])) $cols['visit_status'] = $idx;
-                        elseif ($col === 'VISIT DATE' || ($col === 'DATE' && $idx > ($cols['visit_status'] ?? 99))) $cols['visit_date'] = $idx;
-                        elseif ($col === 'VISIT DONE') $cols['visit_done'] = $idx;
-                        elseif ($col === 'VISIT REMARK' || ($col === 'REMARK' && $idx > ($cols['visit_status'] ?? 99))) $cols['visit_remark'] = $idx;
-                        elseif ($col === 'BOOKING DATE') $cols['booking_date'] = $idx;
-                        elseif (in_array($col, ['NAME ON', 'REGISTRY NAME'])) $cols['registry_name'] = $idx;
-                        elseif (in_array($col, ['UNIT NUMBER', 'PLOT NUMBER']) || ($col === 'NUMBER' && $cols['number'] !== null)) $cols['registry_unit'] = $idx;
-                        elseif ($col === 'AREA') $cols['registry_area'] = $idx;
-                        elseif ($col === 'REG DATE') $cols['registry_date'] = $idx;
-                        elseif ($col === 'REG STATUS') $cols['registry_status'] = $idx;
+                        $raw_col = strtoupper(trim((string)$h_val));
+                        $col = preg_replace('/[^A-Z0-9]/', '', $raw_col);
+
+                        // Date & Time (including Meta created_time)
+                        if (in_array($col, ['DATE', 'CREATEDTIME', 'CREATEDAT', 'TIME', 'TIMESTAMP', 'DATECREATED', 'LEADCREATIONTIME']) && $cols['date'] === null) {
+                            $cols['date'] = $idx;
+                        }
+                        // Leads / Source / Project
+                        elseif (in_array($col, ['LEADS', 'SOURCE', 'PROJECT', 'PROJECTNAME'])) {
+                            $cols['leads'] = $idx;
+                        }
+                        // Lead Code / Meta Lead ID
+                        elseif (in_array($col, ['LEADCODE', 'CODE', 'LEADID', 'ID'])) {
+                            $cols['lead_code'] = $idx;
+                        }
+                        // Number / Serial No
+                        elseif (in_array($col, ['NUMBER', 'SERIALNO', 'SERIALNUMBER', 'SRNO', 'SNO', 'REF', 'REFNO']) && $cols['number'] === null) {
+                            $cols['number'] = $idx;
+                        }
+                        // Campaign Name (Meta campaign_name / influencer)
+                        elseif (in_array($col, ['CAMPAIGN', 'CAMPAIGNNAME', 'INFLUENCER', 'BROKER', 'CP', 'CHAMPING', 'CHAMPINGNAME', 'UTMCAMPAIGN'])) {
+                            $cols['influencer'] = $idx;
+                        }
+                        // Ad Name / Adset Name (Meta)
+                        elseif (in_array($col, ['ADNAME', 'ADSETNAME', 'ADSET', 'AD'])) {
+                            $cols['ad_name'] = $idx;
+                        }
+                        // Form Name (Meta)
+                        elseif (in_array($col, ['FORMNAME', 'FORM', 'LEADFORM'])) {
+                            $cols['form_name'] = $idx;
+                        }
+                        // Platform (Meta fb/ig)
+                        elseif (in_array($col, ['PLATFORM', 'CHANNEL', 'MEDIUM'])) {
+                            $cols['platform'] = $idx;
+                        }
+                        // City / Location
+                        elseif (in_array($col, ['CITY', 'LOCATION', 'STATE'])) {
+                            $cols['city'] = $idx;
+                        }
+                        // Full Name
+                        elseif (in_array($col, ['NAME', 'FULLNAME', 'CLIENTNAME', 'CUSTOMERNAME'])) {
+                            $cols['name'] = $idx;
+                        }
+                        // First Name / Last Name
+                        elseif (in_array($col, ['FIRSTNAME', 'FNAME'])) {
+                            $cols['first_name'] = $idx;
+                        }
+                        elseif (in_array($col, ['LASTNAME', 'LNAME', 'SURNAME'])) {
+                            $cols['last_name'] = $idx;
+                        }
+                        // Phone / Mobile Number (Meta phone_number)
+                        elseif (in_array($col, ['PHONE', 'PHONENUMBER', 'MOBILE', 'MOBILENUMBER', 'CONTACT', 'CONTACTNUMBER', 'CELL', 'PHONENO', 'MOBILENO'])) {
+                            $cols['contact'] = $idx;
+                        }
+                        // Email (Meta email)
+                        elseif (in_array($col, ['EMAIL', 'EMAILADDRESS', 'MAIL', 'GMAIL'])) {
+                            $cols['email'] = $idx;
+                        }
+                        // Telecaller
+                        elseif (in_array($col, ['TELECALLER', 'CALLER', 'AGENT', 'ASSIGNEDTO', 'EXECUTIVE'])) {
+                            $cols['telecaller'] = $idx;
+                        }
+                        // Status
+                        elseif (in_array($col, ['STATUS', 'STATUS1', 'LEADSTATUS'])) {
+                            $cols['status'] = $idx;
+                        }
+                        // Remarks
+                        elseif (in_array($col, ['REMARK1', 'REMARK'])) {
+                            $cols['remark1'] = $idx;
+                        }
+                        elseif ($col === 'SITE LOCATION') {
+                            $cols['site_loc'] = $idx;
+                        }
+                        elseif (in_array($col, ['FOLLOWUP1', 'FOLLOWUP', 'FOLLOWUPDATE', 'NEXTFOLLOWUP'])) {
+                            $cols['followup1'] = $idx;
+                        }
+                        elseif ($col === 'REMARK2') {
+                            $cols['remark2'] = $idx;
+                        }
+                        elseif ($col === 'FOLLOWUP2') {
+                            $cols['followup2'] = $idx;
+                        }
+                        elseif ($col === 'REMARK3') {
+                            $cols['remark3'] = $idx;
+                        }
+                        // Site Visit
+                        elseif (in_array($col, ['VISIT', 'SITEVISIT', 'VISITSTATUS'])) {
+                            $cols['visit_status'] = $idx;
+                        }
+                        elseif (in_array($col, ['VISITDATE', 'SITEVISITDATE'])) {
+                            $cols['visit_date'] = $idx;
+                        }
+                        elseif ($col === 'VISITDONE') {
+                            $cols['visit_done'] = $idx;
+                        }
+                        elseif ($col === 'VISITREMARK') {
+                            $cols['visit_remark'] = $idx;
+                        }
+                        // Registry / Booking
+                        elseif ($col === 'BOOKINGDATE') {
+                            $cols['booking_date'] = $idx;
+                        }
+                        elseif (in_array($col, ['NAMEON', 'REGISTRYNAME'])) {
+                            $cols['registry_name'] = $idx;
+                        }
+                        elseif (in_array($col, ['UNITNUMBER', 'PLOTNUMBER'])) {
+                            $cols['registry_unit'] = $idx;
+                        }
+                        elseif ($col === 'AREA') {
+                            $cols['registry_area'] = $idx;
+                        }
+                        elseif ($col === 'REGDATE') {
+                            $cols['registry_date'] = $idx;
+                        }
+                        elseif ($col === 'REGSTATUS') {
+                            $cols['registry_status'] = $idx;
+                        }
                     }
 
                     // Fallbacks for default positions if headers not named
@@ -172,13 +263,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
 
                     $ins_stmt = $pdo->prepare("
                         INSERT INTO leads (
-                            lead_code, name, phone, project, source, status, campaign_number,
+                            lead_code, name, phone, email, project, source, status, campaign_number,
                             influencer, city, site_location, remark_1, followup_1,
                             remark_2, followup_2, remark_3, visit_status, visit_date,
                             visit_done, visit_remark, booking_date, registry_name,
                             registry_unit_number, registry_area, registry_date, registry_status,
-                            telecaller_id, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            telecaller_id, created_at, ad_name, meta_campaign_name
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ");
 
                     $pdo->beginTransaction();
@@ -186,20 +277,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                     for ($i = 1; $i < count($rows); $i++) {
                         $row = $rows[$i];
                         
-                        $name  = trim((string)($row[$cols['name'] ?? $name_col] ?? ''));
-                        $phone = trim((string)($row[$cols['contact'] ?? $phone_col] ?? ''));
+                        // Extract Name (support full name or first + last)
+                        $name = trim((string)($row[$cols['name'] ?? $name_col] ?? ''));
+                        if (empty($name)) {
+                            $first = trim((string)($row[$cols['first_name'] ?? -1] ?? ''));
+                            $last  = trim((string)($row[$cols['last_name'] ?? -1] ?? ''));
+                            $name  = trim($first . ' ' . $last);
+                        }
+
+                        // Extract Phone (clean prefixes like p:+91 or +91 or spaces)
+                        $raw_phone = trim((string)($row[$cols['contact'] ?? $phone_col] ?? ''));
+                        $clean_phone = preg_replace('/[^0-9]/', '', $raw_phone);
+                        $phone = (strlen($clean_phone) >= 10) ? substr($clean_phone, -10) : $clean_phone;
 
                         if (empty($name) && empty($phone)) {
                             continue;
                         }
 
-                        if (empty($name) || empty($phone)) {
+                        if (empty($phone)) {
                             $skipped_count++;
                             continue;
                         }
 
-                        $clean_phone = preg_replace('/[^0-9]/', '', $phone);
-                        $last_10 = (strlen($clean_phone) >= 10) ? substr($clean_phone, -10) : $clean_phone;
+                        if (empty($name)) {
+                            $name = 'Meta Lead ' . ($imported_count + 1);
+                        }
+
+                        $last_10 = (strlen($phone) >= 10) ? substr($phone, -10) : $phone;
 
                         if ($skip_duplicates && !empty($last_10)) {
                             $check_dup_stmt->execute(['%' . $last_10]);
@@ -209,13 +313,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                             }
                         }
 
-                        $raw_proj = trim((string)($row[$cols['leads'] ?? -1] ?? ''));
-                        $project = !empty($raw_proj) ? normalizeProjectName($raw_proj) : 'Project A';
-                        $source  = !empty($raw_proj) ? $raw_proj : 'Excel Bulk Import';
+                        // Email
+                        $email = !empty($cols['email']) ? trim((string)($row[$cols['email']] ?? '')) : null;
 
-                        $lead_code = !empty($row[$cols['lead_code'] ?? -1]) ? trim((string)$row[$cols['lead_code']]) : generateLeadCode($source, $created_at ?? date('Y-m-d H:i:s'), $imported_count + 1);
+                        // Meta details
+                        $platform_val = !empty($cols['platform']) ? strtolower(trim((string)($row[$cols['platform']] ?? ''))) : '';
+                        $form_val     = !empty($cols['form_name']) ? trim((string)($row[$cols['form_name']] ?? '')) : '';
+                        $ad_val       = !empty($cols['ad_name']) ? trim((string)($row[$cols['ad_name']] ?? '')) : '';
+                        $camp_val     = !empty($cols['influencer']) ? trim((string)($row[$cols['influencer']] ?? '')) : '';
+                        $raw_source   = !empty($cols['leads']) ? trim((string)($row[$cols['leads']] ?? '')) : '';
+
+                        // Determine Intelligent Source
+                        if (!empty($raw_source)) {
+                            $source = $raw_source;
+                        } elseif ($platform_val === 'fb' || strpos($platform_val, 'face') !== false) {
+                            $source = 'Meta Ads (Facebook)';
+                        } elseif ($platform_val === 'ig' || strpos($platform_val, 'insta') !== false) {
+                            $source = 'Meta Ads (Instagram)';
+                        } elseif (!empty($camp_val)) {
+                            $source = 'Meta: ' . $camp_val;
+                        } elseif (!empty($form_val)) {
+                            $source = 'Meta: ' . $form_val;
+                        } else {
+                            $source = 'Excel Bulk Import';
+                        }
+
+                        // Determine Campaign / Influencer
+                        $influencer = !empty($camp_val) ? $camp_val : (!empty($form_val) ? $form_val : '');
+
+                        // Determine Project
+                        $project = !empty($raw_source) ? normalizeProjectName($raw_source) : (!empty($influencer) ? normalizeProjectName($influencer) : 'Project A');
+
+                        // Timestamp parse (supports Meta ISO 8601 like 2026-09-29T08:15:00+0000 or standard dates)
+                        $raw_date = !empty($cols['date']) ? trim((string)($row[$cols['date']] ?? '')) : '';
+                        if (!empty($raw_date)) {
+                            $ts = strtotime($raw_date);
+                            $created_at = ($ts && $ts > 0) ? date('Y-m-d H:i:s', $ts) : date('Y-m-d H:i:s');
+                        } else {
+                            $created_at = date('Y-m-d H:i:s');
+                        }
+
+                        $lead_code = !empty($row[$cols['lead_code'] ?? -1]) ? trim((string)$row[$cols['lead_code']]) : generateLeadCode($source, $created_at, $imported_count + 1);
                         $camp_num  = trim((string)($row[$cols['number'] ?? -1] ?? ''));
-                        $influencer= trim((string)($row[$cols['influencer'] ?? -1] ?? ''));
                         $city      = trim((string)($row[$cols['city'] ?? -1] ?? ''));
                         $status    = !empty($row[$cols['status'] ?? -1]) ? trim((string)$row[$cols['status']]) : 'New';
                         $rem1      = trim((string)($row[$cols['remark1'] ?? -1] ?? ''));
@@ -234,8 +373,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                         $reg_area  = trim((string)($row[$cols['registry_area'] ?? -1] ?? ''));
                         $reg_date  = !empty($row[$cols['registry_date'] ?? -1]) ? trim((string)$row[$cols['registry_date']]) : null;
                         $reg_stat  = !empty($row[$cols['registry_status'] ?? -1]) ? trim((string)$row[$cols['registry_status']]) : 'Pending';
-
-                        $created_at = !empty($row[$cols['date'] ?? -1]) ? date('Y-m-d H:i:s', strtotime((string)$row[$cols['date']])) : date('Y-m-d H:i:s');
 
                         // Telecaller Assignment:
                         $assigned_tc = null;
@@ -263,12 +400,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                         }
 
                         $ins_stmt->execute([
-                            $lead_code, $name, $phone, $project, $source, $status, $camp_num,
+                            $lead_code, $name, $phone, $email, $project, $source, $status, $camp_num,
                             $influencer, $city, $site_loc, $rem1, $fu1,
                             $rem2, $fu2, $rem3, $v_stat, $v_date,
                             $v_done, $v_rem, $b_date, $reg_name,
                             $reg_unit, $reg_area, $reg_date, $reg_stat,
-                            $assigned_tc, $created_at
+                            $assigned_tc, $created_at, $ad_val, $camp_val
                         ]);
 
                         $imported_count++;
