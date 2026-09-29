@@ -465,6 +465,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                                             </label>
                                             <div class="text-muted small">Prevents adding the same customer lead twice in your database.</div>
                                         </div>
+                                    </div>
                                     <div class="form-check form-switch m-0">
                                         <input class="form-check-input fs-4 cursor-pointer" type="checkbox" role="switch" name="skip_duplicates" value="1" id="skipDupSwitch" checked>
                                     </div>
