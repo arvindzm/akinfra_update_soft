@@ -362,7 +362,53 @@ if ($to_date !== '') {
     $params[] = $to_date;
 }
 
-$query .= " ORDER BY l.created_at DESC";
+// Count total leads for pagination
+$count_query = "
+    SELECT COUNT(*)
+    FROM leads l
+    LEFT JOIN users t ON l.telecaller_id = t.id
+    LEFT JOIN users s ON l.salesperson_id = s.id
+    LEFT JOIN ad_campaigns c ON l.campaign_id = c.id
+    " . substr($query, strpos($query, "WHERE"));
+$count_stmt = $pdo->prepare($count_query);
+$count_stmt->execute($params);
+$total_leads = (int)$count_stmt->fetchColumn();
+
+// Pagination setup
+$per_page_param = isset($_GET['per_page']) ? trim($_GET['per_page']) : '25';
+$page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+
+if ($per_page_param === 'all') {
+    $per_page = $total_leads > 0 ? $total_leads : 25;
+    $total_pages = 1;
+    $page = 1;
+    $limit_sql = "";
+} else {
+    $per_page = max(1, (int)$per_page_param);
+    $total_pages = max(1, (int)ceil($total_leads / $per_page));
+    if ($page > $total_pages) $page = $total_pages;
+    $offset = ($page - 1) * $per_page;
+    $limit_sql = " LIMIT $per_page OFFSET $offset";
+}
+
+$start_record = $total_leads > 0 ? (($page - 1) * ($per_page_param === 'all' ? $total_leads : $per_page) + 1) : 0;
+$end_record = $per_page_param === 'all' ? $total_leads : min($total_leads, $page * $per_page);
+
+if (!function_exists('getAllLeadsPageUrl')) {
+    function getAllLeadsPageUrl($p, $pp = null) {
+        $prms = $_GET;
+        $prms['page'] = $p;
+        if ($pp !== null) {
+            $prms['per_page'] = $pp;
+            if ($pp !== 'all') {
+                $prms['page'] = 1;
+            }
+        }
+        return 'leads.php?' . http_build_query($prms);
+    }
+}
+
+$query .= " ORDER BY l.created_at DESC" . $limit_sql;
 
 $stmt = $pdo->prepare($query);
 $stmt->execute($params);
@@ -628,16 +674,36 @@ if (empty($all_projects)) {
 
             <div class="table-card shadow-sm border-0 mb-4" style="border-radius: 12px;">
                 <div class="table-header d-flex justify-content-between align-items-center p-3 bg-white border-bottom flex-wrap gap-2">
-                    <h5 class="mb-0 fw-bold text-dark text-nowrap">
-                        <i class="fa-solid fa-list-check me-2 text-primary"></i>All Leads List <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 ms-1">(<?php echo count($leads); ?>)</span>
-                    </h5>
-                    <!-- Bulk Selection Actions Toolbar -->
-                    <div id="bulkSelectionBar" class="d-none align-items-center gap-2 bg-primary bg-opacity-10 border border-primary border-opacity-25 px-3 py-1 rounded-3">
-                        <span class="small fw-bold text-primary"><i class="fa-solid fa-check-double me-1"></i><span id="selectedLeadCount">0</span> selected</span>
-                        <button type="button" class="btn btn-sm btn-primary fw-bold shadow-sm" id="btnOpenSelectedShuffleModal" data-bs-toggle="modal" data-bs-target="#shuffleSelectedModal">
-                            <i class="fa-solid fa-shuffle me-1"></i>Shuffle Selected Leads (<span class="selectedCountText">0</span>)
-                        </button>
-                        <button type="button" class="btn btn-sm btn-light border text-muted" id="btnClearLeadSelection">Clear</button>
+                    <div class="d-flex align-items-center gap-2">
+                        <h5 class="mb-0 fw-bold text-dark text-nowrap">
+                            <i class="fa-solid fa-list-check me-2 text-primary"></i>All Leads List 
+                            <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 ms-1">(<?php echo $total_leads; ?>)</span>
+                        </h5>
+                        <?php if($total_leads > 0): ?>
+                            <span class="text-muted small ms-2 d-none d-md-inline">Showing <strong><?php echo $start_record; ?>-<?php echo $end_record; ?></strong> of <strong><?php echo $total_leads; ?></strong></span>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        <!-- Bulk Selection Actions Toolbar -->
+                        <div id="bulkSelectionBar" class="d-none align-items-center gap-2 bg-primary bg-opacity-10 border border-primary border-opacity-25 px-3 py-1 rounded-3">
+                            <span class="small fw-bold text-primary"><i class="fa-solid fa-check-double me-1"></i><span id="selectedLeadCount">0</span> selected</span>
+                            <button type="button" class="btn btn-sm btn-primary fw-bold shadow-sm" id="btnOpenSelectedShuffleModal" data-bs-toggle="modal" data-bs-target="#shuffleSelectedModal">
+                                <i class="fa-solid fa-shuffle me-1"></i>Shuffle Selected Leads (<span class="selectedCountText">0</span>)
+                            </button>
+                            <button type="button" class="btn btn-sm btn-light border text-muted" id="btnClearLeadSelection">Clear</button>
+                        </div>
+
+                        <div class="d-flex align-items-center gap-2">
+                            <label class="small text-muted fw-semibold me-1 mb-0 text-nowrap"><i class="fa-solid fa-layer-group me-1"></i>Per page:</label>
+                            <select class="form-select form-select-sm" style="width: auto; font-weight: 600;" onchange="location.href=this.value;">
+                                <option value="<?php echo getAllLeadsPageUrl(1, 10); ?>" <?php echo $per_page_param === '10' ? 'selected' : ''; ?>>10 leads</option>
+                                <option value="<?php echo getAllLeadsPageUrl(1, 25); ?>" <?php echo $per_page_param === '25' ? 'selected' : ''; ?>>25 leads (Default)</option>
+                                <option value="<?php echo getAllLeadsPageUrl(1, 50); ?>" <?php echo $per_page_param === '50' ? 'selected' : ''; ?>>50 leads</option>
+                                <option value="<?php echo getAllLeadsPageUrl(1, 100); ?>" <?php echo $per_page_param === '100' ? 'selected' : ''; ?>>100 leads</option>
+                                <option value="<?php echo getAllLeadsPageUrl(1, 'all'); ?>" <?php echo $per_page_param === 'all' ? 'selected' : ''; ?>>All leads</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
@@ -658,17 +724,17 @@ if (empty($all_projects)) {
                                 <th style="min-width: 130px;">CONTACT</th>
                                 <th style="min-width: 140px;">TELECALLER</th>
                                 <th style="min-width: 155px;">STATUS-1</th>
-                                <th style="min-width: 180px;">REMARK 1</th>
+                                <th style="min-width: 280px;" class="bg-maroon-subtle">REMARK 1</th>
                                 <th style="min-width: 140px;">SITE LOCATION</th>
                                 <th style="min-width: 150px;">FOLLOWUP 1</th>
-                                <th style="min-width: 180px;">REMARK 2</th>
+                                <th style="min-width: 280px;">REMARK 2</th>
                                 <th style="min-width: 150px;">FOLLOWUP 2</th>
-                                <th style="min-width: 180px;">REMARK-3</th>
+                                <th style="min-width: 280px;">REMARK-3</th>
                                 <th style="min-width: 75px;">DAYS</th>
                                 <th style="min-width: 95px;">VISIT</th>
                                 <th style="min-width: 150px;">DATE</th>
                                 <th style="min-width: 105px;">VISIT DONE</th>
-                                <th style="min-width: 180px;">REMARK</th>
+                                <th style="min-width: 260px;">REMARK</th>
                                 <th style="min-width: 130px;">DATE</th>
                                 <th style="min-width: 140px;">NAME ON</th>
                                 <th style="min-width: 110px;">NUMBER</th>
@@ -824,7 +890,7 @@ if (empty($all_projects)) {
 
                                 <!-- 11. REMARK 1 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" value="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>" placeholder="Stage 1 remark...">
+                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" value="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>" placeholder="Stage 1 remark..." title="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>">
                                 </td>
 
                                 <!-- 12. SITE LOCATION (Dropdown 2/4) -->
@@ -851,7 +917,7 @@ if (empty($all_projects)) {
 
                                 <!-- 14. REMARK 2 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_2" value="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>" placeholder="Stage 2 remark...">
+                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_2" value="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>" placeholder="Stage 2 remark..." title="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>">
                                 </td>
 
                                 <!-- 15. FOLLOWUP 2 -->
@@ -861,7 +927,7 @@ if (empty($all_projects)) {
 
                                 <!-- 16. REMARK-3 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_3" value="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>" placeholder="Stage 3 remark...">
+                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_3" value="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>" placeholder="Stage 3 remark..." title="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>">
                                 </td>
 
                                 <!-- 17. DAYS -->
@@ -893,7 +959,7 @@ if (empty($all_projects)) {
 
                                 <!-- 21. REMARK (Visit Feedback) -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_remark" value="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>" placeholder="Visit feedback...">
+                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_remark" value="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>" placeholder="Visit feedback..." title="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>">
                                 </td>
 
                                 <!-- 22. DATE (Booking Date) -->
@@ -1043,6 +1109,58 @@ if (empty($all_projects)) {
                         </tbody>
                     </table>
                 </div>
+                
+                <!-- Table Pagination Footer -->
+                <?php if ($total_pages > 1 || $total_leads > 0): ?>
+                <div class="p-3 bg-white border-top d-flex flex-wrap align-items-center justify-content-between gap-3" style="border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;">
+                    <div class="text-muted small fw-semibold">
+                        Showing <span class="text-dark fw-bold"><?php echo $start_record; ?></span> to <span class="text-dark fw-bold"><?php echo $end_record; ?></span> of <span class="text-dark fw-bold"><?php echo $total_leads; ?></span> total leads
+                        <?php if($per_page_param !== 'all'): ?>
+                            <span class="ms-1">(Page <strong><?php echo $page; ?></strong> of <strong><?php echo $total_pages; ?></strong>)</span>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <?php if ($total_pages > 1): ?>
+                    <nav aria-label="All leads table navigation">
+                        <ul class="pagination pagination-sm mb-0">
+                            <!-- First -->
+                            <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                <a class="page-link" href="<?php echo getAllLeadsPageUrl(1); ?>" title="First Page"><i class="fa-solid fa-angles-left"></i></a>
+                            </li>
+                            <!-- Previous -->
+                            <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                <a class="page-link" href="<?php echo getAllLeadsPageUrl($page - 1); ?>" title="Previous Page"><i class="fa-solid fa-angle-left"></i> Prev</a>
+                            </li>
+                            
+                            <?php
+                            $start_p = max(1, $page - 2);
+                            $end_p = min($total_pages, $page + 2);
+                            if ($start_p > 1) {
+                                echo '<li class="page-item disabled"><span class="page-link">...</span></li>';
+                            }
+                            for ($p = $start_p; $p <= $end_p; $p++): ?>
+                                <li class="page-item <?php echo $p === $page ? 'active' : ''; ?>">
+                                    <a class="page-link fw-bold" href="<?php echo getAllLeadsPageUrl($p); ?>"><?php echo $p; ?></a>
+                                </li>
+                            <?php endfor;
+                            if ($end_p < $total_pages) {
+                                echo '<li class="page-item disabled"><span class="page-link">...</span></li>';
+                            }
+                            ?>
+                            
+                            <!-- Next -->
+                            <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                <a class="page-link" href="<?php echo getAllLeadsPageUrl($page + 1); ?>" title="Next Page">Next <i class="fa-solid fa-angle-right"></i></a>
+                            </li>
+                            <!-- Last -->
+                            <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                <a class="page-link" href="<?php echo getAllLeadsPageUrl($total_pages); ?>" title="Last Page"><i class="fa-solid fa-angles-right"></i></a>
+                            </li>
+                        </ul>
+                    </nav>
+                    <?php endif; ?>
+                </div>
+                <?php endif; ?>
             </div>
         </div>
     </div>

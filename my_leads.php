@@ -263,23 +263,15 @@ if ($filter_preset === 'today' && empty($from_date) && empty($to_date)) {
     $to_date = date('Y-m-t', strtotime('last day of last month'));
 }
 
-$query = "";
-$params = [$user_id];
+$where = [];
+$params = [];
 
 if ($role === 'telecaller') {
-    $query = "
-        SELECT l.*, s.name as sales_name 
-        FROM leads l
-        LEFT JOIN users s ON l.salesperson_id = s.id
-        WHERE l.telecaller_id = ?
-    ";
+    $where[] = "l.telecaller_id = ?";
+    $params[] = $user_id;
 } else {
-    $query = "
-        SELECT l.*, t.name as telecaller_name 
-        FROM leads l
-        LEFT JOIN users t ON l.telecaller_id = t.id
-        WHERE l.salesperson_id = ?
-    ";
+    $where[] = "l.salesperson_id = ?";
+    $params[] = $user_id;
 }
 
 if ($search !== '') {
@@ -308,25 +300,124 @@ if ($search !== '') {
         }
     }
     
-    $query .= " AND (" . implode(" OR ", $search_conditions) . ")";
+    $where[] = "(" . implode(" OR ", $search_conditions) . ")";
 }
 
 if ($status_filter !== '') {
-    $query .= " AND l.status = ?";
-    $params[] = $status_filter;
+    $synonyms = [
+        'INT' => ['INT', 'Interested', 'In Progress'],
+        'Interested' => ['INT', 'Interested', 'In Progress'],
+        'In Progress' => ['INT', 'Interested', 'In Progress'],
+        'NI' => ['NI', 'Not Interested'],
+        'Not Interested' => ['NI', 'Not Interested'],
+        'OS' => ['OS', 'Out of Service'],
+        'Out of Service' => ['OS', 'Out of Service'],
+        'OTH_NOT_PICK' => ['OTH_NOT_PICK', 'RNR (No Response)'],
+        'RNR (No Response)' => ['OTH_NOT_PICK', 'RNR (No Response)'],
+        'OTH_BUSY' => ['OTH_BUSY', 'Busy / Callback'],
+        'Busy / Callback' => ['OTH_BUSY', 'Busy / Callback'],
+        'OTH_SWITCH_OFF' => ['OTH_SWITCH_OFF', 'Switched Off'],
+        'Switched Off' => ['OTH_SWITCH_OFF', 'Switched Off'],
+        'Invalid Number' => ['Invalid Number', 'Wrong Number'],
+        'Wrong Number' => ['Invalid Number', 'Wrong Number'],
+        'Call Disconnect' => ['Call Disconnect', 'Call Disconnected'],
+        'Call Disconnected' => ['Call Disconnect', 'Call Disconnected'],
+        'OTH Call Back' => ['OTH Call Back', 'OTH_CALL_BACK'],
+        'OTH_CALL_BACK' => ['OTH Call Back', 'OTH_CALL_BACK'],
+        'Assigned to Sales' => ['Assigned to Sales', 'Forward to Sales'],
+        'Forward to Sales' => ['Assigned to Sales', 'Forward to Sales'],
+        'Booked / Token Paid' => ['Booked / Token Paid', 'Booked / Token'],
+        'Booked / Token' => ['Booked / Token Paid', 'Booked / Token'],
+    ];
+
+    if (isset($synonyms[$status_filter])) {
+        $st_in = implode(',', array_fill(0, count($synonyms[$status_filter]), '?'));
+        $where[] = "l.status IN ($st_in)";
+        foreach ($synonyms[$status_filter] as $sf) {
+            $params[] = $sf;
+        }
+    } else {
+        $where[] = "l.status = ?";
+        $params[] = $status_filter;
+    }
 }
 
 if ($from_date !== '') {
-    $query .= " AND DATE(l.created_at) >= ?";
+    $where[] = "DATE(l.created_at) >= ?";
     $params[] = $from_date;
 }
 
 if ($to_date !== '') {
-    $query .= " AND DATE(l.created_at) <= ?";
+    $where[] = "DATE(l.created_at) <= ?";
     $params[] = $to_date;
 }
 
-$query .= " ORDER BY l.created_at DESC";
+$where_clause = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
+
+// Count total leads for pagination
+$count_sql = "
+    SELECT COUNT(*) 
+    FROM leads l
+    " . ($role === 'telecaller' ? "LEFT JOIN users s ON l.salesperson_id = s.id" : "LEFT JOIN users t ON l.telecaller_id = t.id") . "
+    $where_clause
+";
+$count_stmt = $pdo->prepare($count_sql);
+$count_stmt->execute($params);
+$total_leads = (int)$count_stmt->fetchColumn();
+
+// Pagination setup
+$per_page_param = isset($_GET['per_page']) ? trim($_GET['per_page']) : '25';
+$page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+
+if ($per_page_param === 'all') {
+    $per_page = $total_leads > 0 ? $total_leads : 25;
+    $total_pages = 1;
+    $page = 1;
+    $limit_sql = "";
+} else {
+    $per_page = max(1, (int)$per_page_param);
+    $total_pages = max(1, (int)ceil($total_leads / $per_page));
+    if ($page > $total_pages) $page = $total_pages;
+    $offset = ($page - 1) * $per_page;
+    $limit_sql = " LIMIT $per_page OFFSET $offset";
+}
+
+$start_record = $total_leads > 0 ? (($page - 1) * ($per_page_param === 'all' ? $total_leads : $per_page) + 1) : 0;
+$end_record = $per_page_param === 'all' ? $total_leads : min($total_leads, $page * $per_page);
+
+if (!function_exists('getMyLeadsPageUrl')) {
+    function getMyLeadsPageUrl($p, $pp = null) {
+        $prms = $_GET;
+        $prms['page'] = $p;
+        if ($pp !== null) {
+            $prms['per_page'] = $pp;
+            if ($pp !== 'all') {
+                $prms['page'] = 1;
+            }
+        }
+        return 'my_leads.php?' . http_build_query($prms);
+    }
+}
+
+if ($role === 'telecaller') {
+    $query = "
+        SELECT l.*, s.name as sales_name 
+        FROM leads l
+        LEFT JOIN users s ON l.salesperson_id = s.id
+        $where_clause
+        ORDER BY l.created_at DESC
+        $limit_sql
+    ";
+} else {
+    $query = "
+        SELECT l.*, t.name as telecaller_name 
+        FROM leads l
+        LEFT JOIN users t ON l.telecaller_id = t.id
+        $where_clause
+        ORDER BY l.created_at DESC
+        $limit_sql
+    ";
+}
 
 $stmt = $pdo->prepare($query);
 $stmt->execute($params);
@@ -475,31 +566,31 @@ if (empty($all_projects)) {
                             <label class="form-label text-muted fw-semibold small mb-1 text-nowrap">Status</label>
                             <select name="status" class="form-select">
                                 <option value="">All Statuses</option>
-                                <option value="New" <?php echo $status_filter == 'New' ? 'selected' : ''; ?>>New</option>
-                                <option value="In Progress" <?php echo $status_filter == 'In Progress' ? 'selected' : ''; ?>>In Progress</option>
-                                <option value="Follow Up" <?php echo $status_filter == 'Follow Up' ? 'selected' : ''; ?>>Follow Up</option>
-                                <option value="Out of Service" <?php echo ($status_filter == 'Out of Service' || $status_filter == 'OS') ? 'selected' : ''; ?>>Out of Service</option>
-                                <option value="Invalid Number" <?php echo ($status_filter == 'Invalid Number' || $status_filter == 'Wrong Number') ? 'selected' : ''; ?>>Invalid Number</option>
-                                <option value="Incoming Off" <?php echo $status_filter == 'Incoming Off' ? 'selected' : ''; ?>>Incoming Off</option>
-                                <option value="OTH Call Back" <?php echo ($status_filter == 'OTH Call Back' || $status_filter == 'OTH_CALL_BACK') ? 'selected' : ''; ?>>OTH Call Back</option>
-                                <option value="Call Forwarding" <?php echo $status_filter == 'Call Forwarding' ? 'selected' : ''; ?>>Call Forwarding</option>
-                                <option value="Call Disconnect" <?php echo ($status_filter == 'Call Disconnect' || $status_filter == 'Call Disconnected') ? 'selected' : ''; ?>>Call Disconnect</option>
-                                <option value="RNR (No Response)" <?php echo $status_filter == 'RNR (No Response)' ? 'selected' : ''; ?>>RNR (No Response)</option>
-                                <option value="Busy / Callback" <?php echo $status_filter == 'Busy / Callback' ? 'selected' : ''; ?>>Busy / Callback</option>
-                                <option value="Switched Off" <?php echo $status_filter == 'Switched Off' ? 'selected' : ''; ?>>Switched Off</option>
-                                <option value="Wrong Number" <?php echo $status_filter == 'Wrong Number' ? 'selected' : ''; ?>>Wrong Number</option>
-                                <option value="Not Interested" <?php echo $status_filter == 'Not Interested' ? 'selected' : ''; ?>>Not Interested</option>
-                                <option value="Budget Issue" <?php echo $status_filter == 'Budget Issue' ? 'selected' : ''; ?>>Budget Issue</option>
-                                <option value="Location Mismatch" <?php echo $status_filter == 'Location Mismatch' ? 'selected' : ''; ?>>Location Mismatch</option>
-                                <option value="Site Visit Scheduled" <?php echo $status_filter == 'Site Visit Scheduled' ? 'selected' : ''; ?>>Site Visit Scheduled</option>
-                                <option value="Site Visit Done" <?php echo $status_filter == 'Site Visit Done' ? 'selected' : ''; ?>>Site Visit Done</option>
-                                <option value="Re-Visit Scheduled" <?php echo $status_filter == 'Re-Visit Scheduled' ? 'selected' : ''; ?>>Re-Visit Scheduled</option>
-                                <option value="Negotiation" <?php echo $status_filter == 'Negotiation' ? 'selected' : ''; ?>>Negotiation</option>
-                                <option value="Assigned to Sales" <?php echo $status_filter == 'Assigned to Sales' ? 'selected' : ''; ?>>Assigned to Sales</option>
-                                <option value="Booked / Token Paid" <?php echo $status_filter == 'Booked / Token Paid' ? 'selected' : ''; ?>>Booked / Token Paid</option>
-                                <option value="Converted" <?php echo $status_filter == 'Converted' ? 'selected' : ''; ?>>Converted</option>
-                                <option value="Dead" <?php echo $status_filter == 'Dead' ? 'selected' : ''; ?>>Dead</option>
-                                <option value="DND" <?php echo $status_filter == 'DND' ? 'selected' : ''; ?>>DND</option>
+                                <option value="INT" <?php echo ($status_filter == 'INT' || $status_filter == 'Interested' || $status_filter == 'In Progress') ? 'selected' : ''; ?>>🟢 INT (Interested)</option>
+                                <option value="NI" <?php echo ($status_filter == 'NI' || $status_filter == 'Not Interested') ? 'selected' : ''; ?>>🔴 NI (Not Interested)</option>
+                                <option value="Out of Service" <?php echo ($status_filter == 'Out of Service' || $status_filter == 'OS') ? 'selected' : ''; ?>>⚪ Out of Service</option>
+                                <option value="Invalid Number" <?php echo ($status_filter == 'Invalid Number' || $status_filter == 'Wrong Number') ? 'selected' : ''; ?>>❌ Invalid Number</option>
+                                <option value="Incoming Off" <?php echo $status_filter == 'Incoming Off' ? 'selected' : ''; ?>>📵 Incoming Off</option>
+                                <option value="OTH Call Back" <?php echo ($status_filter == 'OTH Call Back' || $status_filter == 'OTH_CALL_BACK') ? 'selected' : ''; ?>>🟠 OTH Call Back</option>
+                                <option value="Call Forwarding" <?php echo $status_filter == 'Call Forwarding' ? 'selected' : ''; ?>>📞 Call Forwarding</option>
+                                <option value="Call Disconnect" <?php echo ($status_filter == 'Call Disconnect' || $status_filter == 'Call Disconnected') ? 'selected' : ''; ?>>📴 Call Disconnect</option>
+                                <option value="OS" <?php echo $status_filter == 'OS' ? 'selected' : ''; ?>>🔘 OS</option>
+                                <option value="OTH" <?php echo $status_filter == 'OTH' ? 'selected' : ''; ?>>◽ OTH</option>
+                                <option value="OTH_NOT_PICK" <?php echo ($status_filter == 'OTH_NOT_PICK' || $status_filter == 'RNR (No Response)') ? 'selected' : ''; ?>>🟣 OTH_NOT_PICK</option>
+                                <option value="OTH_BUSY" <?php echo ($status_filter == 'OTH_BUSY' || $status_filter == 'Busy / Callback') ? 'selected' : ''; ?>>🔷 OTH_BUSY</option>
+                                <option value="OTH_SWITCH_OFF" <?php echo ($status_filter == 'OTH_SWITCH_OFF' || $status_filter == 'Switched Off') ? 'selected' : ''; ?>>⚫ OTH_SWITCH_OFF</option>
+                                <option value="OTH_NETWORK" <?php echo $status_filter == 'OTH_NETWORK' ? 'selected' : ''; ?>>📶 OTH_NETWORK</option>
+                                <option value="New" <?php echo $status_filter == 'New' ? 'selected' : ''; ?>>🔵 New</option>
+                                <option value="Follow Up" <?php echo $status_filter == 'Follow Up' ? 'selected' : ''; ?>>🟡 Follow Up</option>
+                                <option value="Site Visit Scheduled" <?php echo $status_filter == 'Site Visit Scheduled' ? 'selected' : ''; ?>>📍 Site Visit Scheduled</option>
+                                <option value="Site Visit Done" <?php echo $status_filter == 'Site Visit Done' ? 'selected' : ''; ?>>✅ Site Visit Done</option>
+                                <option value="Re-Visit Scheduled" <?php echo $status_filter == 'Re-Visit Scheduled' ? 'selected' : ''; ?>>🔄 Re-Visit Scheduled</option>
+                                <option value="Negotiation" <?php echo $status_filter == 'Negotiation' ? 'selected' : ''; ?>>🤝 Negotiation</option>
+                                <option value="Assigned to Sales" <?php echo ($status_filter == 'Assigned to Sales' || $status_filter == 'Forward to Sales') ? 'selected' : ''; ?>>💼 Assigned to Sales</option>
+                                <option value="Booked / Token Paid" <?php echo ($status_filter == 'Booked / Token Paid' || $status_filter == 'Booked / Token') ? 'selected' : ''; ?>>💰 Booked / Token Paid</option>
+                                <option value="Converted" <?php echo $status_filter == 'Converted' ? 'selected' : ''; ?>>🏆 Converted</option>
+                                <option value="Dead" <?php echo $status_filter == 'Dead' ? 'selected' : ''; ?>>☠️ Dead</option>
+                                <option value="DND" <?php echo $status_filter == 'DND' ? 'selected' : ''; ?>>⛔ DND</option>
                             </select>
                         </div>
                         <div class="col-xl-4 col-lg-6 col-md-6">
@@ -536,8 +627,26 @@ if (empty($all_projects)) {
 
             <!-- Leads Table (Client Excel Spreadsheet View) -->
             <div class="table-card shadow-sm border-0 mb-4" style="border-radius: 12px;">
-                <div class="table-header d-flex justify-content-between align-items-center p-3 bg-white border-bottom">
-                    <h5 class="mb-0 fw-bold text-dark"><i class="fa-solid fa-list-check me-2 text-primary"></i><?php echo $role === 'telecaller' ? 'My Assigned Leads' : 'My Pipeline Leads'; ?> <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 ms-1">(<?php echo count($leads); ?>)</span></h5>
+                <div class="table-header d-flex flex-wrap justify-content-between align-items-center p-3 bg-white border-bottom gap-2">
+                    <div class="d-flex align-items-center gap-2">
+                        <h5 class="mb-0 fw-bold text-dark">
+                            <i class="fa-solid fa-list-check me-2 text-primary"></i><?php echo $role === 'telecaller' ? 'My Assigned Leads' : 'My Pipeline Leads'; ?> 
+                            <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 ms-1">(<?php echo $total_leads; ?>)</span>
+                        </h5>
+                        <?php if($total_leads > 0): ?>
+                            <span class="text-muted small ms-2 d-none d-md-inline">Showing <strong><?php echo $start_record; ?>-<?php echo $end_record; ?></strong> of <strong><?php echo $total_leads; ?></strong></span>
+                        <?php endif; ?>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <label class="small text-muted fw-semibold me-1 mb-0 text-nowrap"><i class="fa-solid fa-layer-group me-1"></i>Per page:</label>
+                        <select class="form-select form-select-sm" style="width: auto; font-weight: 600;" onchange="location.href=this.value;">
+                            <option value="<?php echo getMyLeadsPageUrl(1, 10); ?>" <?php echo $per_page_param === '10' ? 'selected' : ''; ?>>10 leads</option>
+                            <option value="<?php echo getMyLeadsPageUrl(1, 25); ?>" <?php echo $per_page_param === '25' ? 'selected' : ''; ?>>25 leads (Default)</option>
+                            <option value="<?php echo getMyLeadsPageUrl(1, 50); ?>" <?php echo $per_page_param === '50' ? 'selected' : ''; ?>>50 leads</option>
+                            <option value="<?php echo getMyLeadsPageUrl(1, 100); ?>" <?php echo $per_page_param === '100' ? 'selected' : ''; ?>>100 leads</option>
+                            <option value="<?php echo getMyLeadsPageUrl(1, 'all'); ?>" <?php echo $per_page_param === 'all' ? 'selected' : ''; ?>>All leads</option>
+                        </select>
+                    </div>
                 </div>
                 
                 <div class="excel-table-container">
@@ -554,17 +663,17 @@ if (empty($all_projects)) {
                                 <th style="min-width: 130px;">CONTACT</th>
                                 <th style="min-width: 130px;">TELECALLER</th>
                                 <th style="min-width: 155px;">STATUS-1</th>
-                                <th style="min-width: 180px;">REMARK 1</th>
+                                <th style="min-width: 280px;" class="bg-maroon-subtle">REMARK 1</th>
                                 <th style="min-width: 140px;">SITE LOCATION</th>
                                 <th style="min-width: 150px;">FOLLOWUP 1</th>
-                                <th style="min-width: 180px;">REMARK 2</th>
+                                <th style="min-width: 280px;">REMARK 2</th>
                                 <th style="min-width: 150px;">FOLLOWUP 2</th>
-                                <th style="min-width: 180px;">REMARK-3</th>
+                                <th style="min-width: 280px;">REMARK-3</th>
                                 <th style="min-width: 75px;">DAYS</th>
                                 <th style="min-width: 95px;">VISIT</th>
                                 <th style="min-width: 150px;">DATE</th>
                                 <th style="min-width: 105px;">VISIT DONE</th>
-                                <th style="min-width: 180px;">REMARK</th>
+                                <th style="min-width: 260px;">REMARK</th>
                                 <th style="min-width: 130px;">DATE</th>
                                 <th style="min-width: 140px;">NAME ON</th>
                                 <th style="min-width: 110px;">NUMBER</th>
@@ -699,7 +808,7 @@ if (empty($all_projects)) {
 
                                 <!-- 11. REMARK 1 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" value="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>" placeholder="Stage 1 remark...">
+                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" value="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>" placeholder="Stage 1 remark..." title="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>">
                                 </td>
 
                                 <!-- 12. SITE LOCATION (Dropdown 2/4) -->
@@ -726,7 +835,7 @@ if (empty($all_projects)) {
 
                                 <!-- 14. REMARK 2 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_2" value="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>" placeholder="Stage 2 remark...">
+                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_2" value="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>" placeholder="Stage 2 remark..." title="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>">
                                 </td>
 
                                 <!-- 15. FOLLOWUP 2 -->
@@ -736,7 +845,7 @@ if (empty($all_projects)) {
 
                                 <!-- 16. REMARK-3 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_3" value="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>" placeholder="Stage 3 remark...">
+                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_3" value="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>" placeholder="Stage 3 remark..." title="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>">
                                 </td>
 
                                 <!-- 17. DAYS -->
@@ -768,7 +877,7 @@ if (empty($all_projects)) {
 
                                 <!-- 21. REMARK (Visit Feedback) -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_remark" value="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>" placeholder="Visit feedback...">
+                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_remark" value="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>" placeholder="Visit feedback..." title="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>">
                                 </td>
 
                                 <!-- 22. DATE (Booking Date) -->
@@ -1238,6 +1347,58 @@ if (empty($all_projects)) {
                         </tbody>
                     </table>
                 </div>
+                
+                <!-- Table Pagination Footer -->
+                <?php if ($total_pages > 1 || $total_leads > 0): ?>
+                <div class="p-3 bg-white border-top d-flex flex-wrap align-items-center justify-content-between gap-3" style="border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;">
+                    <div class="text-muted small fw-semibold">
+                        Showing <span class="text-dark fw-bold"><?php echo $start_record; ?></span> to <span class="text-dark fw-bold"><?php echo $end_record; ?></span> of <span class="text-dark fw-bold"><?php echo $total_leads; ?></span> total leads
+                        <?php if($per_page_param !== 'all'): ?>
+                            <span class="ms-1">(Page <strong><?php echo $page; ?></strong> of <strong><?php echo $total_pages; ?></strong>)</span>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <?php if ($total_pages > 1): ?>
+                    <nav aria-label="Leads table navigation">
+                        <ul class="pagination pagination-sm mb-0">
+                            <!-- First -->
+                            <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                <a class="page-link" href="<?php echo getMyLeadsPageUrl(1); ?>" title="First Page"><i class="fa-solid fa-angles-left"></i></a>
+                            </li>
+                            <!-- Previous -->
+                            <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                                <a class="page-link" href="<?php echo getMyLeadsPageUrl($page - 1); ?>" title="Previous Page"><i class="fa-solid fa-angle-left"></i> Prev</a>
+                            </li>
+                            
+                            <?php
+                            $start_p = max(1, $page - 2);
+                            $end_p = min($total_pages, $page + 2);
+                            if ($start_p > 1) {
+                                echo '<li class="page-item disabled"><span class="page-link">...</span></li>';
+                            }
+                            for ($p = $start_p; $p <= $end_p; $p++): ?>
+                                <li class="page-item <?php echo $p === $page ? 'active' : ''; ?>">
+                                    <a class="page-link fw-bold" href="<?php echo getMyLeadsPageUrl($p); ?>"><?php echo $p; ?></a>
+                                </li>
+                            <?php endfor;
+                            if ($end_p < $total_pages) {
+                                echo '<li class="page-item disabled"><span class="page-link">...</span></li>';
+                            }
+                            ?>
+                            
+                            <!-- Next -->
+                            <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                <a class="page-link" href="<?php echo getMyLeadsPageUrl($page + 1); ?>" title="Next Page">Next <i class="fa-solid fa-angle-right"></i></a>
+                            </li>
+                            <!-- Last -->
+                            <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                                <a class="page-link" href="<?php echo getMyLeadsPageUrl($total_pages); ?>" title="Last Page"><i class="fa-solid fa-angles-right"></i></a>
+                            </li>
+                        </ul>
+                    </nav>
+                    <?php endif; ?>
+                </div>
+                <?php endif; ?>
             </div>
 
         </div>

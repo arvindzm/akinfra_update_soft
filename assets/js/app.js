@@ -300,6 +300,7 @@ $(document).ready(function () {
             tdCell.removeClass('cell-saving-glow');
             if (res && res.status === 'success') {
                 cellEl.data('initial-val', val);
+                cellEl.attr('title', val);
                 tdCell.addClass('cell-saved-glow');
                 setTimeout(function () { tdCell.removeClass('cell-saved-glow'); }, 1200);
                 showCrmToast(res.message || 'Saved successfully!', 'success');
