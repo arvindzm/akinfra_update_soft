@@ -668,16 +668,18 @@ function getLeadProject($lead): string {
 }
 
 /**
- * Determines 2-letter Lead Code Prefix:
+ * Determines 2 to 4-letter Lead Code Prefix:
  * 1. FL (Facebook / Meta Ads Leads)
- * 2. CL (Calling / Cold Calling / CP / Telecaller Leads)
- * 3. OL (Organic / Online / Website / Google / Referral Leads)
- * 4. MS (Meta Source / Magicbricks / 99acres / Marketing Portal Leads)
+ * 2. HAU (HAU Project Leads)
+ * 3. CL (Calling / Cold Calling / CP / Telecaller Leads)
+ * 4. OL (Organic / Online / Website / Google / Referral Leads)
+ * 5. MS (Meta Source / Magicbricks / 99acres / Marketing Portal Leads)
+ * Or any custom 2-5 character project prefix
  */
 function getLeadPrefix(?string $source = null, ?string $lead_type = null): string {
     if (!empty($lead_type)) {
         $lt = strtoupper(trim($lead_type));
-        if (in_array($lt, ['FL', 'CL', 'OL', 'MS'])) {
+        if (preg_match('/^[A-Z0-9]{2,5}$/', $lt)) {
             return $lt;
         }
     }
@@ -687,7 +689,9 @@ function getLeadPrefix(?string $source = null, ?string $lead_type = null): strin
     }
     
     $src = strtolower(trim($source));
-    if (strpos($src, 'face') !== false || strpos($src, 'fb') !== false || strpos($src, 'insta') !== false) {
+    if (strpos($src, 'hau') !== false) {
+        return 'HAU';
+    } elseif (strpos($src, 'face') !== false || strpos($src, 'fb') !== false || strpos($src, 'insta') !== false) {
         return 'FL';
     } elseif (strpos($src, 'call') !== false || strpos($src, 'tele') !== false || strpos($src, 'cp') !== false || strpos($src, 'channel') !== false || strpos($src, 'inbound') !== false || strpos($src, 'outbound') !== false) {
         return 'CL';
@@ -701,7 +705,7 @@ function getLeadPrefix(?string $source = null, ?string $lead_type = null): strin
 }
 
 /**
- * Get or format unique Lead Reference Code: [PREFIX][DDMMYY][SEQ] (e.g. FL2109260001, CL2109260002)
+ * Get or format unique Lead Reference Code: [PREFIX][DDMMYY][SEQ] (e.g. FL2109260001, HAU2109260002)
  */
 function getLeadCode($lead): string {
     if (!is_array($lead)) return 'FL' . date('dmy') . '0001';
@@ -709,23 +713,34 @@ function getLeadCode($lead): string {
     $id = (int)($lead['id'] ?? 1);
     $seq_str = sprintf('%04d', $id > 0 ? $id : 1);
     $source = $lead['source'] ?? '';
-    $prefix = getLeadPrefix($source, $lead['lead_type'] ?? null);
+    $prefix = getLeadPrefix($source, $lead['lead_type'] ?? ($lead['project'] ?? null));
     $date_part = !empty($lead['created_at']) ? date('dmy', strtotime($lead['created_at'])) : date('dmy');
 
     if (!empty($lead['lead_code'])) {
         $clean = strtoupper(str_replace([' ', '-'], '', $lead['lead_code']));
-        if (preg_match('/^(FL|CL|OL|MS)(\d{6})(\d{4,})$/i', $clean)) {
+        // Match PREFIX + 6-digit date + 4+ digit sequence (e.g. FL2909260001, HAU2909260001)
+        if (preg_match('/^([A-Z]{2,5})(\d{6})(\d{4,})$/i', $clean)) {
             return $clean;
         }
-        if (preg_match('/^(FL|CL|OL|MS)(\d{6})(\d{1,3})$/i', $clean, $m)) {
+        // Match PREFIX + 6-digit date + 1-3 digit sequence (e.g. FL2909261, HAU29092601) -> pad to 4 digits
+        if (preg_match('/^([A-Z]{2,5})(\d{6})(\d{1,3})$/i', $clean, $m)) {
             return sprintf('%s%s%04d', $m[1], $m[2], (int)$m[3]);
         }
-        if (preg_match('/^(FL|CL|OL|MS)(\d{2})(\d{2})(\d{4})(\d+)$/i', $clean, $m)) {
+        // Match PREFIX + DDMMYYYY + seq
+        if (preg_match('/^([A-Z]{2,5})(\d{2})(\d{2})(\d{4})(\d+)$/i', $clean, $m)) {
             $p = $m[1];
             $d = $m[2] . $m[3] . substr($m[4], -2);
             $num = (int)$m[5];
             if ($num >= 1000) $num = $num - 1000 + 1;
             return sprintf('%s%s%04d', $p, $d, $num);
+        }
+        // If clean is just a prefix like HAU, FL, CL, OL, MS
+        if (preg_match('/^[A-Z]{2,5}$/i', $clean)) {
+            return sprintf('%s%s%04d', $clean, $date_part, $id > 0 ? $id : 1);
+        }
+        // If clean is just a numeric sequence like 1, 25, 100
+        if (preg_match('/^\d+$/', $clean)) {
+            return sprintf('%s%s%04d', $prefix, $date_part, (int)$clean);
         }
         return $clean;
     }

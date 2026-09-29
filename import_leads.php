@@ -13,6 +13,9 @@ if (!isLoggedIn() || getUser()['role'] !== 'admin') {
 // Fetch all active telecallers for custom import distribution selector
 $all_telecallers_for_form = $pdo->query("SELECT id, name, is_present FROM users WHERE role IN ('telecaller','sales') AND is_active = 1 ORDER BY is_present DESC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
+// Fetch existing project names for import dropdown
+$existing_projects_for_form = $pdo->query("SELECT DISTINCT project FROM leads WHERE project IS NOT NULL AND project != '' AND project != 'N/A' ORDER BY project ASC")->fetchAll(PDO::FETCH_COLUMN);
+
 // Download Sample Templates
 if (isset($_GET['action'])) {
     if ($_GET['action'] === 'download_excel') {
@@ -246,6 +249,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                         $custom_tc_names = $name_stmt->fetchAll(PDO::FETCH_KEY_PAIR);
                     }
 
+                    // Check if Admin selected project or prefix override
+                    $selected_project = !empty($_POST['selected_project']) ? trim((string)$_POST['selected_project']) : '';
+                    $raw_prefix_sel   = !empty($_POST['lead_code_prefix']) ? trim((string)$_POST['lead_code_prefix']) : '';
+                    if ($raw_prefix_sel === 'CUSTOM' && !empty($_POST['custom_prefix'])) {
+                        $selected_prefix = strtoupper(trim((string)$_POST['custom_prefix']));
+                    } else {
+                        $selected_prefix = $raw_prefix_sel;
+                    }
+
                     // Fetch active telecallers fallback
                     $tc_stmt = $pdo->query("SELECT id FROM users WHERE role = 'telecaller' AND is_present = 1 AND (is_active IS NULL OR is_active = 1) ORDER BY id ASC");
                     $all_telecallers = $tc_stmt->fetchAll(PDO::FETCH_COLUMN);
@@ -342,7 +354,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                         $influencer = !empty($camp_val) ? $camp_val : (!empty($form_val) ? $form_val : '');
 
                         // Determine Project
-                        $project = !empty($raw_source) ? normalizeProjectName($raw_source) : (!empty($influencer) ? normalizeProjectName($influencer) : 'Project A');
+                        if (!empty($selected_project) && $selected_project !== 'AUTO') {
+                            $project = $selected_project;
+                        } else {
+                            $project = !empty($raw_source) ? normalizeProjectName($raw_source) : (!empty($influencer) ? normalizeProjectName($influencer) : 'Project A');
+                        }
 
                         // Timestamp parse (supports Meta ISO 8601 like 2026-09-29T08:15:00+0000 or standard dates)
                         $raw_date = !empty($cols['date']) ? trim((string)($row[$cols['date']] ?? '')) : '';
@@ -353,7 +369,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                             $created_at = date('Y-m-d H:i:s');
                         }
 
-                        $lead_code = !empty($row[$cols['lead_code'] ?? -1]) ? trim((string)$row[$cols['lead_code']]) : generateLeadCode($source, $created_at, $imported_count + 1);
+                        // Smart Lead Code Resolution
+                        // Supports:
+                        // 1. Blank in Excel -> Auto-generates standard [PREFIX][DDMMYY][SEQ] (e.g. HAU2909260001, FL2909260001)
+                        // 2. Only a number (e.g. 1, 2, 001) -> Formats with prefix & date to [PREFIX][DDMMYY]0001
+                        // 3. Only prefix (e.g. HAU, FL, CL, MS, OL) -> Attaches date + sequence automatically
+                        // 4. Full lead code (e.g. FL290926001, HAU2909260001) -> Normalizes cleanly
+                        $raw_code = !empty($row[$cols['lead_code'] ?? -1]) ? trim((string)$row[$cols['lead_code']]) : '';
+
+                        // Determine Effective Prefix
+                        $eff_prefix = '';
+                        if (!empty($selected_prefix) && $selected_prefix !== 'AUTO') {
+                            $eff_prefix = $selected_prefix;
+                        } elseif (preg_match('/^[A-Z0-9]{2,5}$/i', $raw_code)) {
+                            $eff_prefix = strtoupper($raw_code);
+                            $raw_code = ''; // Prefix specified, auto-append date + serial sequence
+                        } elseif (stripos($project, 'HAU') !== false) {
+                            $eff_prefix = 'HAU';
+                        } elseif (stripos($project, 'FL') !== false) {
+                            $eff_prefix = 'FL';
+                        } else {
+                            $eff_prefix = getLeadPrefix($source, $project);
+                        }
+
+                        $date_part = date('dmy', strtotime($created_at));
+                        $seq_num   = $imported_count + 1;
+
+                        if (empty($raw_code)) {
+                            $lead_code = sprintf('%s%s%04d', $eff_prefix, $date_part, $seq_num);
+                        } elseif (is_numeric($raw_code)) {
+                            $lead_code = sprintf('%s%s%04d', $eff_prefix, $date_part, (int)$raw_code);
+                        } else {
+                            $lead_code = getLeadCode([
+                                'lead_code'  => $raw_code,
+                                'created_at' => $created_at,
+                                'source'     => $source,
+                                'project'    => $project,
+                                'lead_type'  => $eff_prefix
+                            ]);
+                        }
                         $camp_num  = trim((string)($row[$cols['number'] ?? -1] ?? ''));
                         $city      = trim((string)($row[$cols['city'] ?? -1] ?? ''));
                         $status    = !empty($row[$cols['status'] ?? -1]) ? trim((string)$row[$cols['status']]) : 'New';
@@ -608,6 +662,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                                     </div>
                                 </div>
 
+                                <!-- Project & Lead Code Configuration (Optional) -->
+                                <div class="card border mb-4 rounded-3 shadow-none bg-light bg-opacity-50">
+                                    <div class="card-header bg-white py-2 px-3 border-bottom d-flex align-items-center justify-content-between">
+                                        <label class="form-label fw-bold text-dark mb-0 small text-uppercase">
+                                            <i class="fa-solid fa-hashtag text-primary me-1"></i>Project & Lead Code Prefix (Optional)
+                                        </label>
+                                        <span class="badge bg-success-subtle text-success border border-success border-opacity-25" style="font-size: 11px;">Auto-Generated</span>
+                                    </div>
+                                    <div class="card-body p-3">
+                                        <div class="row g-3">
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold small text-dark mb-1">Select Project for This Sheet</label>
+                                                <select name="selected_project" class="form-select form-select-sm">
+                                                    <option value="AUTO">-- Auto-Detect (From Excel "Project" Column) --</option>
+                                                    <option value="HAU">HAU</option>
+                                                    <?php foreach ($existing_projects_for_form as $pname): ?>
+                                                        <?php if ($pname !== 'HAU'): ?>
+                                                            <option value="<?php echo htmlspecialchars($pname); ?>"><?php echo htmlspecialchars($pname); ?></option>
+                                                        <?php endif; ?>
+                                                    <?php endforeach; ?>
+                                                </select>
+                                                <div class="form-text small" style="font-size: 11px;">Agar sabhi leads ek hi project ki hain (jaise HAU), yahan choose kar sakte hain.</div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold small text-dark mb-1">Lead Code Prefix Format</label>
+                                                <select name="lead_code_prefix" class="form-select form-select-sm" id="prefix_selector" onchange="toggleCustomPrefix(this.value)">
+                                                    <option value="AUTO">-- Auto-Detect (HAU, FL, CL, OL, MS) --</option>
+                                                    <option value="HAU">HAU (e.g. HAU<?php echo date('dmy'); ?>0001)</option>
+                                                    <option value="FL">FL - Meta / Facebook Ads (e.g. FL<?php echo date('dmy'); ?>0001)</option>
+                                                    <option value="CL">CL - Calling / Telecaller (e.g. CL<?php echo date('dmy'); ?>0001)</option>
+                                                    <option value="OL">OL - Organic / Referral / Web (e.g. OL<?php echo date('dmy'); ?>0001)</option>
+                                                    <option value="MS">MS - Portals / Magicbricks (e.g. MS<?php echo date('dmy'); ?>0001)</option>
+                                                    <option value="CUSTOM">Custom Prefix (Type your own code)</option>
+                                                </select>
+                                                <div class="mt-2 d-none" id="custom_prefix_box">
+                                                    <input type="text" name="custom_prefix" id="custom_prefix_input" class="form-control form-control-sm text-uppercase" placeholder="Enter Prefix (e.g. HAU, PR1, AURA)" maxlength="6">
+                                                </div>
+                                                <div class="form-text small" style="font-size: 11px;">Har lead ka pura unique code auto-generate hoga.</div>
+                                            </div>
+                                        </div>
+                                        <div class="alert alert-info py-2 px-3 mb-0 mt-3 d-flex align-items-center gap-2 border-0 bg-primary bg-opacity-10 text-primary small rounded-2">
+                                            <i class="fa-solid fa-circle-check fs-5 flex-shrink-0"></i>
+                                            <div>
+                                                <strong>Aapko Excel sheet me pura code likhne ki bilkul jarurat nahi hai!</strong><br>
+                                                Excel me Lead Code column khali chhod dein, ya sirf prefix (jaise <code>HAU</code>) likhein, ya <code>1</code> likhein — CRM apne aap date aur serial number jod kar <strong>HAU<?php echo date('dmy'); ?>0001</strong> format me complete kar dega.
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 <!-- Custom Telecaller Round-Robin Selector (Optional) -->
                                 <div class="card border mb-4 rounded-3 shadow-none bg-light bg-opacity-50">
                                     <div class="card-header bg-white py-2 px-3 border-bottom d-flex align-items-center justify-content-between">
@@ -745,6 +849,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                 lbl.innerHTML = `<span class="badge bg-primary px-2 py-1"><i class="fa-solid fa-check me-1"></i>${count} Telecallers Selected (Round-Robin Active)</span>`;
             } else {
                 lbl.innerHTML = `0 Selected (Default Auto Mode)`;
+            }
+        }
+
+        function toggleCustomPrefix(val) {
+            const box = document.getElementById('custom_prefix_box');
+            const inp = document.getElementById('custom_prefix_input');
+            if (val === 'CUSTOM') {
+                box.classList.remove('d-none');
+                inp.focus();
+            } else {
+                box.classList.add('d-none');
             }
         }
     </script>
