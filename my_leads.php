@@ -373,7 +373,7 @@ if (empty($all_projects)) {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=20260929_status_colors">
+    <link rel="stylesheet" href="assets/css/style.css?v=20260929_status_v3">
     <style>
         @keyframes blinker {
             50% { opacity: 0.3; }
@@ -668,7 +668,7 @@ if (empty($all_projects)) {
 
                                 <!-- 10. STATUS-1 (Dropdown 1/4) -->
                                 <td>
-                                    <select class="excel-cell-select table-inline-status" data-lead-id="<?php echo $lead['id']; ?>" data-field="status" data-current-status="<?php echo htmlspecialchars($lead['status']); ?>" style="background-color: <?php echo getLeadStatusColor($lead['status']); ?> !important; color: #ffffff !important; font-weight: 700 !important; border-color: <?php echo getLeadStatusColor($lead['status']); ?> !important;">
+                                    <select class="table-inline-status" data-lead-id="<?php echo $lead['id']; ?>" data-field="status" data-current-status="<?php echo htmlspecialchars($lead['status']); ?>" style="background-color: <?php echo getLeadStatusColor($lead['status']); ?> !important; color: #ffffff !important; font-weight: 700 !important; border-color: <?php echo getLeadStatusColor($lead['status']); ?> !important;">
                                         <option value="INT" style="background-color:#16a34a !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'INT' || $lead['status'] === 'Interested' || $lead['status'] === 'In Progress') ? 'selected' : ''; ?>>🟢 INT</option>
                                         <option value="NI" style="background-color:#dc2626 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'NI' || $lead['status'] === 'Not Interested') ? 'selected' : ''; ?>>🔴 NI</option>
                                         <option value="Out of Service" style="background-color:#475569 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Out of Service' || $lead['status'] === 'OS') ? 'selected' : ''; ?>>⚪ Out of Service</option>

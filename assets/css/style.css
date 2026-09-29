@@ -1242,27 +1242,46 @@ body.sidebar-open .sidebar-overlay {
 /* Table Inline Status Dropdown Styles */
 select.table-inline-status,
 .table-inline-status {
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    appearance: none !important;
     font-weight: 700 !important;
     font-size: 12px !important;
     border-radius: 8px !important;
-    padding: 6px 30px 6px 12px !important;
+    padding: 6px 28px 6px 12px !important;
     cursor: pointer !important;
     transition: all 0.2s ease !important;
     border-width: 1.5px !important;
+    border-style: solid !important;
     background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23ffffff' stroke-linecap='round' stroke-linejoin='round' stroke-width='2.5' d='m2 5 6 6 6-6'/%3e%3c/svg%3e") !important;
     background-repeat: no-repeat !important;
     background-position: right 8px center !important;
-    background-size: 12px 10px !important;
-    min-width: 140px;
+    background-size: 11px 9px !important;
+    min-width: 135px;
     max-width: 180px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1) !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12) !important;
+    color: #ffffff !important;
+    line-height: 1.4 !important;
+}
+
+select.table-inline-status::-ms-expand {
+    display: none !important;
+}
+
+/* Hover and Focus: NEVER turn white! Maintain rich background color and white text */
+select.table-inline-status:hover,
+.table-inline-status:hover {
+    filter: brightness(0.92) contrast(1.05) !important;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.22) !important;
     color: #ffffff !important;
 }
 
 select.table-inline-status:focus,
 .table-inline-status:focus {
-    box-shadow: 0 0 0 0.25rem rgba(99, 102, 241, 0.45) !important;
+    filter: brightness(0.92) contrast(1.05) !important;
+    box-shadow: 0 0 0 0.2rem rgba(255, 255, 255, 0.5), 0 3px 8px rgba(0,0,0,0.25) !important;
     outline: none !important;
+    color: #ffffff !important;
 }
 
 /* Status: INT (Interested) -> Green */
@@ -1272,6 +1291,13 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #15803d !important;
 }
+.table-inline-status[data-current-status="INT"]:hover,
+.table-inline-status[data-current-status="INT"]:focus,
+.table-inline-status[data-current-status="Interested"]:hover,
+.table-inline-status[data-current-status="Interested"]:focus {
+    background-color: #15803d !important;
+    color: #ffffff !important;
+}
 
 /* Status: NI (Not Interested) -> Red */
 .table-inline-status[data-current-status="NI"],
@@ -1280,12 +1306,24 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #b91c1c !important;
 }
+.table-inline-status[data-current-status="NI"]:hover,
+.table-inline-status[data-current-status="NI"]:focus,
+.table-inline-status[data-current-status="Not Interested"]:hover,
+.table-inline-status[data-current-status="Not Interested"]:focus {
+    background-color: #b91c1c !important;
+    color: #ffffff !important;
+}
 
 /* Status: New -> Bright Sky Blue */
 .table-inline-status[data-current-status="New"] {
     background-color: #0284c7 !important;
     color: #ffffff !important;
     border-color: #0369a1 !important;
+}
+.table-inline-status[data-current-status="New"]:hover,
+.table-inline-status[data-current-status="New"]:focus {
+    background-color: #0369a1 !important;
+    color: #ffffff !important;
 }
 
 /* Status: In Progress -> Vibrant Teal-Blue */
@@ -1294,12 +1332,22 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #0e7490 !important;
 }
+.table-inline-status[data-current-status="In Progress"]:hover,
+.table-inline-status[data-current-status="In Progress"]:focus {
+    background-color: #0e7490 !important;
+    color: #ffffff !important;
+}
 
 /* Status: Follow Up -> Amber Gold */
 .table-inline-status[data-current-status="Follow Up"] {
     background-color: #d97706 !important;
     color: #ffffff !important;
     border-color: #b45309 !important;
+}
+.table-inline-status[data-current-status="Follow Up"]:hover,
+.table-inline-status[data-current-status="Follow Up"]:focus {
+    background-color: #b45309 !important;
+    color: #ffffff !important;
 }
 
 /* Status: OTH Call Back -> Bright Orange */
@@ -1309,6 +1357,13 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #c2410c !important;
 }
+.table-inline-status[data-current-status="OTH Call Back"]:hover,
+.table-inline-status[data-current-status="OTH Call Back"]:focus,
+.table-inline-status[data-current-status="OTH_CALL_BACK"]:hover,
+.table-inline-status[data-current-status="OTH_CALL_BACK"]:focus {
+    background-color: #c2410c !important;
+    color: #ffffff !important;
+}
 
 /* Status: Call Disconnect -> Coral Red */
 .table-inline-status[data-current-status="Call Disconnect"],
@@ -1316,6 +1371,13 @@ select.table-inline-status:focus,
     background-color: #e11d48 !important;
     color: #ffffff !important;
     border-color: #be123c !important;
+}
+.table-inline-status[data-current-status="Call Disconnect"]:hover,
+.table-inline-status[data-current-status="Call Disconnect"]:focus,
+.table-inline-status[data-current-status="Call Disconnected"]:hover,
+.table-inline-status[data-current-status="Call Disconnected"]:focus {
+    background-color: #be123c !important;
+    color: #ffffff !important;
 }
 
 /* Status: OTH_BUSY -> Indigo Blue */
@@ -1325,6 +1387,13 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #4338ca !important;
 }
+.table-inline-status[data-current-status="OTH_BUSY"]:hover,
+.table-inline-status[data-current-status="OTH_BUSY"]:focus,
+.table-inline-status[data-current-status="Busy / Callback"]:hover,
+.table-inline-status[data-current-status="Busy / Callback"]:focus {
+    background-color: #4338ca !important;
+    color: #ffffff !important;
+}
 
 /* Status: OTH_NOT_PICK -> Purple */
 .table-inline-status[data-current-status="OTH_NOT_PICK"],
@@ -1332,6 +1401,13 @@ select.table-inline-status:focus,
     background-color: #7c3aed !important;
     color: #ffffff !important;
     border-color: #6d28d9 !important;
+}
+.table-inline-status[data-current-status="OTH_NOT_PICK"]:hover,
+.table-inline-status[data-current-status="OTH_NOT_PICK"]:focus,
+.table-inline-status[data-current-status="RNR (No Response)"]:hover,
+.table-inline-status[data-current-status="RNR (No Response)"]:focus {
+    background-color: #6d28d9 !important;
+    color: #ffffff !important;
 }
 
 /* Status: OTH_SWITCH_OFF -> Slate Gray */
@@ -1341,6 +1417,13 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #475569 !important;
 }
+.table-inline-status[data-current-status="OTH_SWITCH_OFF"]:hover,
+.table-inline-status[data-current-status="OTH_SWITCH_OFF"]:focus,
+.table-inline-status[data-current-status="Switched Off"]:hover,
+.table-inline-status[data-current-status="Switched Off"]:focus {
+    background-color: #475569 !important;
+    color: #ffffff !important;
+}
 
 /* Status: Incoming Off -> Warm Stone Gray */
 .table-inline-status[data-current-status="Incoming Off"] {
@@ -1348,12 +1431,22 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #57534e !important;
 }
+.table-inline-status[data-current-status="Incoming Off"]:hover,
+.table-inline-status[data-current-status="Incoming Off"]:focus {
+    background-color: #57534e !important;
+    color: #ffffff !important;
+}
 
 /* Status: Call Forwarding -> Cyan */
 .table-inline-status[data-current-status="Call Forwarding"] {
     background-color: #0891b2 !important;
     color: #ffffff !important;
     border-color: #0e7490 !important;
+}
+.table-inline-status[data-current-status="Call Forwarding"]:hover,
+.table-inline-status[data-current-status="Call Forwarding"]:focus {
+    background-color: #0e7490 !important;
+    color: #ffffff !important;
 }
 
 /* Status: OS / Out of Service -> Dark Slate */
@@ -1363,6 +1456,13 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #334155 !important;
 }
+.table-inline-status[data-current-status="OS"]:hover,
+.table-inline-status[data-current-status="OS"]:focus,
+.table-inline-status[data-current-status="Out of Service"]:hover,
+.table-inline-status[data-current-status="Out of Service"]:focus {
+    background-color: #334155 !important;
+    color: #ffffff !important;
+}
 
 /* Status: OTH_NETWORK -> Teal */
 .table-inline-status[data-current-status="OTH_NETWORK"] {
@@ -1370,12 +1470,22 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #0f766e !important;
 }
+.table-inline-status[data-current-status="OTH_NETWORK"]:hover,
+.table-inline-status[data-current-status="OTH_NETWORK"]:focus {
+    background-color: #0f766e !important;
+    color: #ffffff !important;
+}
 
 /* Status: OTH -> Cool Gray */
 .table-inline-status[data-current-status="OTH"] {
     background-color: #6b7280 !important;
     color: #ffffff !important;
     border-color: #4b5563 !important;
+}
+.table-inline-status[data-current-status="OTH"]:hover,
+.table-inline-status[data-current-status="OTH"]:focus {
+    background-color: #4b5563 !important;
+    color: #ffffff !important;
 }
 
 /* Status: Invalid Number / Wrong Number -> Crimson */
@@ -1385,12 +1495,24 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #881337 !important;
 }
+.table-inline-status[data-current-status="Invalid Number"]:hover,
+.table-inline-status[data-current-status="Invalid Number"]:focus,
+.table-inline-status[data-current-status="Wrong Number"]:hover,
+.table-inline-status[data-current-status="Wrong Number"]:focus {
+    background-color: #881337 !important;
+    color: #ffffff !important;
+}
 
 /* Status: Site Visit Scheduled -> Royal Violet */
 .table-inline-status[data-current-status="Site Visit Scheduled"] {
     background-color: #9333ea !important;
     color: #ffffff !important;
     border-color: #7e22ce !important;
+}
+.table-inline-status[data-current-status="Site Visit Scheduled"]:hover,
+.table-inline-status[data-current-status="Site Visit Scheduled"]:focus {
+    background-color: #7e22ce !important;
+    color: #ffffff !important;
 }
 
 /* Status: Site Visit Done -> Emerald */
@@ -1399,6 +1521,11 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #047857 !important;
 }
+.table-inline-status[data-current-status="Site Visit Done"]:hover,
+.table-inline-status[data-current-status="Site Visit Done"]:focus {
+    background-color: #047857 !important;
+    color: #ffffff !important;
+}
 
 /* Status: Re-Visit Scheduled -> Bright Violet */
 .table-inline-status[data-current-status="Re-Visit Scheduled"] {
@@ -1406,12 +1533,22 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #9333ea !important;
 }
+.table-inline-status[data-current-status="Re-Visit Scheduled"]:hover,
+.table-inline-status[data-current-status="Re-Visit Scheduled"]:focus {
+    background-color: #9333ea !important;
+    color: #ffffff !important;
+}
 
 /* Status: Negotiation -> Deep Amber */
 .table-inline-status[data-current-status="Negotiation"] {
     background-color: #c2410c !important;
     color: #ffffff !important;
     border-color: #9a3412 !important;
+}
+.table-inline-status[data-current-status="Negotiation"]:hover,
+.table-inline-status[data-current-status="Negotiation"]:focus {
+    background-color: #9a3412 !important;
+    color: #ffffff !important;
 }
 
 /* Status: Forward to Sales -> Royal Blue */
@@ -1421,6 +1558,13 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #1d4ed8 !important;
 }
+.table-inline-status[data-current-status="Assigned to Sales"]:hover,
+.table-inline-status[data-current-status="Assigned to Sales"]:focus,
+.table-inline-status[data-current-status="Forward to Sales"]:hover,
+.table-inline-status[data-current-status="Forward to Sales"]:focus {
+    background-color: #1d4ed8 !important;
+    color: #ffffff !important;
+}
 
 /* Status: Booked / Token Paid -> Dark Green */
 .table-inline-status[data-current-status="Booked / Token Paid"],
@@ -1429,12 +1573,24 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #166534 !important;
 }
+.table-inline-status[data-current-status="Booked / Token Paid"]:hover,
+.table-inline-status[data-current-status="Booked / Token Paid"]:focus,
+.table-inline-status[data-current-status="Booked / Token"]:hover,
+.table-inline-status[data-current-status="Booked / Token"]:focus {
+    background-color: #166534 !important;
+    color: #ffffff !important;
+}
 
 /* Status: Converted -> Deep Dark Green */
 .table-inline-status[data-current-status="Converted"] {
     background-color: #14532d !important;
     color: #ffffff !important;
     border-color: #052e16 !important;
+}
+.table-inline-status[data-current-status="Converted"]:hover,
+.table-inline-status[data-current-status="Converted"]:focus {
+    background-color: #052e16 !important;
+    color: #ffffff !important;
 }
 
 /* Status: Dead -> Charcoal */
@@ -1443,12 +1599,22 @@ select.table-inline-status:focus,
     color: #ffffff !important;
     border-color: #0f172a !important;
 }
+.table-inline-status[data-current-status="Dead"]:hover,
+.table-inline-status[data-current-status="Dead"]:focus {
+    background-color: #0f172a !important;
+    color: #ffffff !important;
+}
 
 /* Status: DND -> Pitch Black */
 .table-inline-status[data-current-status="DND"] {
     background-color: #0f172a !important;
     color: #ffffff !important;
     border-color: #020617 !important;
+}
+.table-inline-status[data-current-status="DND"]:hover,
+.table-inline-status[data-current-status="DND"]:focus {
+    background-color: #020617 !important;
+    color: #ffffff !important;
 }
 
 /* Dropdown Menu Options Styling When Opened */
