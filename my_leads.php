@@ -653,10 +653,11 @@ if (empty($all_projects)) {
                     <table class="table table-hover align-middle excel-spreadsheet-table">
                         <thead>
                             <tr>
+                                <th style="width: 50px; text-align: center;" class="text-nowrap">SN</th>
                                 <th style="min-width: 95px;">DATE</th>
                                 <th style="min-width: 130px;">LEADS</th>
                                 <th style="min-width: 140px;">LEAD CODE</th>
-                                <th style="min-width: 110px;">SERIAL NO</th>
+                                <th style="min-width: 110px;">CAMPAIGN NO</th>
                                 <th style="min-width: 130px;">CAMPAIGN NAME</th>
                                 <th style="min-width: 110px;">CITY</th>
                                 <th style="min-width: 180px;">NAME</th>
@@ -684,7 +685,9 @@ if (empty($all_projects)) {
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach($leads as $lead): 
+                            <?php 
+                            $row_sn = ($per_page > 0) ? (($page - 1) * $per_page + 1) : 1;
+                            foreach($leads as $lead): 
                                 $days_elapsed = max(0, (int)floor((time() - strtotime($lead['created_at'])) / 86400));
                                 $clean_phone = preg_replace('/[^0-9]/', '', $lead['phone']);
                                 $wa_phone = (strlen($clean_phone) == 10) ? '91' . $clean_phone : $clean_phone;
@@ -696,6 +699,11 @@ if (empty($all_projects)) {
                                 $regdate_val = !empty($lead['registry_date']) ? date('Y-m-d', strtotime($lead['registry_date'])) : '';
                             ?>
                             <tr>
+                                <!-- SN: Row Serial Number -->
+                                <td class="text-center align-middle text-muted fw-bold text-nowrap" style="width: 50px; font-size: 11px;">
+                                    <?php echo $row_sn++; ?>
+                                </td>
+
                                 <!-- 1. DATE -->
                                 <td class="text-center text-nowrap">
                                     <span class="text-dark fw-semibold" style="font-size: 11.5px;"><?php echo date('d-m-Y', strtotime($lead['created_at'])); ?></span>
@@ -706,7 +714,10 @@ if (empty($all_projects)) {
                                     <div class="fw-semibold text-dark text-nowrap" style="font-size: 11.5px; line-height: 1.2;">
                                         <i class="fa-solid fa-building text-primary me-1" style="font-size: 10px;"></i><?php echo htmlspecialchars(getLeadProject($lead)); ?>
                                     </div>
-                                    <div class="mt-1"><?php echo renderSourceBadge($lead['source']); ?></div>
+                                    <div class="d-flex align-items-center gap-1 mt-1 flex-wrap">
+                                        <?php echo renderLeadTypeBadge($lead['lead_type'] ?? null, $lead['source']); ?>
+                                        <?php echo renderSourceBadge($lead['source']); ?>
+                                    </div>
                                 </td>
 
                                 <!-- 3. LEAD CODE -->

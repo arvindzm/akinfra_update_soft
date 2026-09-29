@@ -251,12 +251,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
 
                     // Check if Admin selected project or prefix override
                     $selected_project = !empty($_POST['selected_project']) ? trim((string)$_POST['selected_project']) : '';
-                    $raw_prefix_sel   = !empty($_POST['lead_code_prefix']) ? trim((string)$_POST['lead_code_prefix']) : '';
-                    if ($raw_prefix_sel === 'CUSTOM' && !empty($_POST['custom_prefix'])) {
-                        $selected_prefix = strtoupper(trim((string)$_POST['custom_prefix']));
-                    } else {
-                        $selected_prefix = $raw_prefix_sel;
-                    }
+                    $selected_prefix  = !empty($_POST['lead_code_prefix']) ? strtoupper(trim((string)$_POST['lead_code_prefix'])) : 'FL';
+                    $starting_serial  = !empty($_POST['starting_serial']) ? max(1, (int)$_POST['starting_serial']) : 1;
 
                     // Fetch active telecallers fallback
                     $tc_stmt = $pdo->query("SELECT id FROM users WHERE role = 'telecaller' AND is_present = 1 AND (is_active IS NULL OR is_active = 1) ORDER BY id ASC");
@@ -280,8 +276,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                             remark_2, followup_2, remark_3, visit_status, visit_date,
                             visit_done, visit_remark, booking_date, registry_name,
                             registry_unit_number, registry_area, registry_date, registry_status,
-                            telecaller_id, created_at, ad_name, meta_campaign_name
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            telecaller_id, created_at, ad_name, meta_campaign_name, lead_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ");
 
                     $pdo->beginTransaction();
@@ -377,11 +373,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                         // 4. Full lead code (e.g. FL290926001, HAU2909260001) -> Normalizes cleanly
                         $raw_code = !empty($row[$cols['lead_code'] ?? -1]) ? trim((string)$row[$cols['lead_code']]) : '';
 
-                        // Determine Effective Prefix
+                        // Determine Effective Prefix (FL, CL, OL, MS, HAU)
                         $eff_prefix = '';
                         if (!empty($selected_prefix) && $selected_prefix !== 'AUTO') {
                             $eff_prefix = $selected_prefix;
-                        } elseif (preg_match('/^[A-Z0-9]{2,5}$/i', $raw_code)) {
+                        } elseif (preg_match('/^[A-Z]{2,5}$/i', $raw_code)) {
                             $eff_prefix = strtoupper($raw_code);
                             $raw_code = ''; // Prefix specified, auto-append date + serial sequence
                         } elseif (stripos($project, 'HAU') !== false) {
@@ -392,8 +388,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                             $eff_prefix = getLeadPrefix($source, $project);
                         }
 
+                        // Set default source based on lead type if none specified in sheet
+                        if ($eff_prefix === 'CL' && (empty($raw_source) || $source === 'Excel Bulk Import')) {
+                            $source = 'Calling (IVR / Telecaller)';
+                        } elseif ($eff_prefix === 'FL' && (empty($raw_source) || $source === 'Excel Bulk Import')) {
+                            $source = 'Meta Ads (Facebook)';
+                        } elseif ($eff_prefix === 'OL' && (empty($raw_source) || $source === 'Excel Bulk Import')) {
+                            $source = 'Organic / Website';
+                        } elseif ($eff_prefix === 'MS' && (empty($raw_source) || $source === 'Excel Bulk Import')) {
+                            $source = 'Marketplace / Portals';
+                        }
+
                         $date_part = date('dmy', strtotime($created_at));
-                        $seq_num   = $imported_count + 1;
+                        $raw_serial = !empty($row[$cols['number'] ?? -1]) ? trim((string)$row[$cols['number']]) : '';
+                        $camp_num  = !empty($raw_serial) ? $raw_serial : (string)($starting_serial + $imported_count);
+                        $seq_num   = is_numeric($camp_num) ? (int)$camp_num : ($starting_serial + $imported_count);
 
                         if (empty($raw_code)) {
                             $lead_code = sprintf('%s%s%04d', $eff_prefix, $date_part, $seq_num);
@@ -408,7 +417,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                                 'lead_type'  => $eff_prefix
                             ]);
                         }
-                        $camp_num  = trim((string)($row[$cols['number'] ?? -1] ?? ''));
                         $city      = trim((string)($row[$cols['city'] ?? -1] ?? ''));
                         $status    = !empty($row[$cols['status'] ?? -1]) ? trim((string)$row[$cols['status']]) : 'New';
                         $rem1      = trim((string)($row[$cols['remark1'] ?? -1] ?? ''));
@@ -459,7 +467,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                             $rem2, $fu2, $rem3, $v_stat, $v_date,
                             $v_done, $v_rem, $b_date, $reg_name,
                             $reg_unit, $reg_area, $reg_date, $reg_stat,
-                            $assigned_tc, $created_at, $ad_val, $camp_val
+                            $assigned_tc, $created_at, $ad_val, $camp_val, $eff_prefix
                         ]);
 
                         $imported_count++;
@@ -666,47 +674,87 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['lead_file'])) {
                                 <div class="card border mb-4 rounded-3 shadow-none bg-light bg-opacity-50">
                                     <div class="card-header bg-white py-2 px-3 border-bottom d-flex align-items-center justify-content-between">
                                         <label class="form-label fw-bold text-dark mb-0 small text-uppercase">
-                                            <i class="fa-solid fa-hashtag text-primary me-1"></i>Project & Lead Code Prefix (Optional)
+                                            <i class="fa-solid fa-list-check text-primary me-1"></i>Choose Lead Type & Code Format (4 Options)
                                         </label>
-                                        <span class="badge bg-success-subtle text-success border border-success border-opacity-25" style="font-size: 11px;">Auto-Generated</span>
+                                        <span class="badge bg-success-subtle text-success border border-success border-opacity-25" style="font-size: 11px;">Auto-Sequential</span>
                                     </div>
                                     <div class="card-body p-3">
+                                        <label class="form-label fw-bold text-dark small mb-2">
+                                            Select Lead Type (Aap jis par tik karenge, wahi code aur type set hoga):
+                                        </label>
+                                        <div class="row g-2 mb-3">
+                                            <!-- Option 1: FL -->
+                                            <div class="col-6 col-md-3">
+                                                <label class="card h-100 p-2 text-center rounded-3 cursor-pointer border shadow-sm lead-type-choice" for="lead_type_fl" style="cursor: pointer; background: #f8faff;">
+                                                    <input type="radio" name="lead_code_prefix" id="lead_type_fl" value="FL" class="form-check-input mx-auto mb-2" checked>
+                                                    <div class="badge bg-primary px-3 py-1 mb-1 font-monospace" style="font-size: 13px;">FL</div>
+                                                    <div class="fw-bold text-dark" style="font-size: 12px;">Facebook / Meta</div>
+                                                    <div class="text-muted font-monospace" style="font-size: 10px;">FL<?php echo date('dmy'); ?>0001</div>
+                                                </label>
+                                            </div>
+
+                                            <!-- Option 2: CL -->
+                                            <div class="col-6 col-md-3">
+                                                <label class="card h-100 p-2 text-center rounded-3 cursor-pointer border shadow-sm lead-type-choice" for="lead_type_cl" style="cursor: pointer; background: #f0fdf4; border-color: #86efac !important;">
+                                                    <input type="radio" name="lead_code_prefix" id="lead_type_cl" value="CL" class="form-check-input mx-auto mb-2">
+                                                    <div class="badge bg-success px-3 py-1 mb-1 font-monospace" style="font-size: 13px;">CL</div>
+                                                    <div class="fw-bold text-dark" style="font-size: 12px;">Calling / IVR</div>
+                                                    <div class="text-muted font-monospace" style="font-size: 10px;">CL<?php echo date('dmy'); ?>0001</div>
+                                                </label>
+                                            </div>
+
+                                            <!-- Option 3: OL -->
+                                            <div class="col-6 col-md-3">
+                                                <label class="card h-100 p-2 text-center rounded-3 cursor-pointer border shadow-sm lead-type-choice" for="lead_type_ol" style="cursor: pointer; background: #faf5ff;">
+                                                    <input type="radio" name="lead_code_prefix" id="lead_type_ol" value="OL" class="form-check-input mx-auto mb-2">
+                                                    <div class="badge px-3 py-1 mb-1 font-monospace text-white" style="font-size: 13px; background-color: #8b5cf6;">OL</div>
+                                                    <div class="fw-bold text-dark" style="font-size: 12px;">Online / Organic</div>
+                                                    <div class="text-muted font-monospace" style="font-size: 10px;">OL<?php echo date('dmy'); ?>0001</div>
+                                                </label>
+                                            </div>
+
+                                            <!-- Option 4: MS -->
+                                            <div class="col-6 col-md-3">
+                                                <label class="card h-100 p-2 text-center rounded-3 cursor-pointer border shadow-sm lead-type-choice" for="lead_type_ms" style="cursor: pointer; background: #fffbeb;">
+                                                    <input type="radio" name="lead_code_prefix" id="lead_type_ms" value="MS" class="form-check-input mx-auto mb-2">
+                                                    <div class="badge bg-warning text-dark px-3 py-1 mb-1 font-monospace" style="font-size: 13px;">MS</div>
+                                                    <div class="fw-bold text-dark" style="font-size: 12px;">Meta Source / Portals</div>
+                                                    <div class="text-muted font-monospace" style="font-size: 10px;">MS<?php echo date('dmy'); ?>0001</div>
+                                                </label>
+                                            </div>
+                                        </div>
+
                                         <div class="row g-3">
                                             <div class="col-md-6">
-                                                <label class="form-label fw-semibold small text-dark mb-1">Select Project for This Sheet</label>
+                                                <label class="form-label fw-semibold small text-dark mb-1">Starting Serial Number (Start Count)</label>
+                                                <div class="input-group input-group-sm">
+                                                    <span class="input-group-text bg-white fw-bold text-muted">#</span>
+                                                    <input type="number" name="starting_serial" value="1" min="1" class="form-control form-control-sm" placeholder="1">
+                                                </div>
+                                                <div class="form-text small" style="font-size: 11px;">Agar Excel me serial number nahi hai, to yahan se shuru hokar 0001, 0002... banna start hoga.</div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label fw-semibold small text-dark mb-1">Project Name (Optional)</label>
                                                 <select name="selected_project" class="form-select form-select-sm">
-                                                    <option value="AUTO">-- Auto-Detect (From Excel "Project" Column) --</option>
+                                                    <option value="AUTO">-- Auto-Detect from Excel Sheet --</option>
+                                                    <option value="Project A">Project A</option>
+                                                    <option value="DGC-II">DGC-II</option>
                                                     <option value="HAU">HAU</option>
                                                     <?php foreach ($existing_projects_for_form as $pname): ?>
-                                                        <?php if ($pname !== 'HAU'): ?>
+                                                        <?php if (!in_array($pname, ['Project A', 'DGC-II', 'HAU'])): ?>
                                                             <option value="<?php echo htmlspecialchars($pname); ?>"><?php echo htmlspecialchars($pname); ?></option>
                                                         <?php endif; ?>
                                                     <?php endforeach; ?>
                                                 </select>
-                                                <div class="form-text small" style="font-size: 11px;">Agar sabhi leads ek hi project ki hain (jaise HAU), yahan choose kar sakte hain.</div>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <label class="form-label fw-semibold small text-dark mb-1">Lead Code Prefix Format</label>
-                                                <select name="lead_code_prefix" class="form-select form-select-sm" id="prefix_selector" onchange="toggleCustomPrefix(this.value)">
-                                                    <option value="AUTO">-- Auto-Detect (HAU, FL, CL, OL, MS) --</option>
-                                                    <option value="HAU">HAU (e.g. HAU<?php echo date('dmy'); ?>0001)</option>
-                                                    <option value="FL">FL - Meta / Facebook Ads (e.g. FL<?php echo date('dmy'); ?>0001)</option>
-                                                    <option value="CL">CL - Calling / Telecaller (e.g. CL<?php echo date('dmy'); ?>0001)</option>
-                                                    <option value="OL">OL - Organic / Referral / Web (e.g. OL<?php echo date('dmy'); ?>0001)</option>
-                                                    <option value="MS">MS - Portals / Magicbricks (e.g. MS<?php echo date('dmy'); ?>0001)</option>
-                                                    <option value="CUSTOM">Custom Prefix (Type your own code)</option>
-                                                </select>
-                                                <div class="mt-2 d-none" id="custom_prefix_box">
-                                                    <input type="text" name="custom_prefix" id="custom_prefix_input" class="form-control form-control-sm text-uppercase" placeholder="Enter Prefix (e.g. HAU, PR1, AURA)" maxlength="6">
-                                                </div>
-                                                <div class="form-text small" style="font-size: 11px;">Har lead ka pura unique code auto-generate hoga.</div>
+                                                <div class="form-text small" style="font-size: 11px;">Aap sheet ke liye project specify kar sakte hain.</div>
                                             </div>
                                         </div>
+
                                         <div class="alert alert-info py-2 px-3 mb-0 mt-3 d-flex align-items-center gap-2 border-0 bg-primary bg-opacity-10 text-primary small rounded-2">
                                             <i class="fa-solid fa-circle-check fs-5 flex-shrink-0"></i>
                                             <div>
                                                 <strong>Aapko Excel sheet me pura code likhne ki bilkul jarurat nahi hai!</strong><br>
-                                                Excel me Lead Code column khali chhod dein, ya sirf prefix (jaise <code>HAU</code>) likhein, ya <code>1</code> likhein — CRM apne aap date aur serial number jod kar <strong>HAU<?php echo date('dmy'); ?>0001</strong> format me complete kar dega.
+                                                Aap bas upar <strong>FL, CL, OL ya MS</strong> par tik karein — CRM sheet ki sabhi leads ko usi hisab se serial number jodkar (jaise <code>CL<?php echo date('dmy'); ?>0001</code>) auto-generate kar dega.
                                             </div>
                                         </div>
                                     </div>

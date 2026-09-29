@@ -164,6 +164,9 @@ try {
         if (!in_array('ad_name', $columns)) {
             $pdo->exec("ALTER TABLE leads ADD COLUMN ad_name VARCHAR(150) NULL");
         }
+        if (!in_array('lead_type', $columns)) {
+            $pdo->exec("ALTER TABLE leads ADD COLUMN lead_type VARCHAR(20) DEFAULT NULL");
+        }
         $pdo->exec("ALTER TABLE leads MODIFY COLUMN status VARCHAR(100) NOT NULL DEFAULT 'New'");
         $pdo->exec("ALTER TABLE leads MODIFY COLUMN site_visit_status VARCHAR(50) DEFAULT 'None'");
 
@@ -693,7 +696,7 @@ function getLeadPrefix(?string $source = null, ?string $lead_type = null): strin
         return 'HAU';
     } elseif (strpos($src, 'face') !== false || strpos($src, 'fb') !== false || strpos($src, 'insta') !== false) {
         return 'FL';
-    } elseif (strpos($src, 'call') !== false || strpos($src, 'tele') !== false || strpos($src, 'cp') !== false || strpos($src, 'channel') !== false || strpos($src, 'inbound') !== false || strpos($src, 'outbound') !== false) {
+    } elseif (strpos($src, 'ivr') !== false || strpos($src, 'call') !== false || strpos($src, 'tele') !== false || strpos($src, 'cp') !== false || strpos($src, 'channel') !== false || strpos($src, 'inbound') !== false || strpos($src, 'outbound') !== false) {
         return 'CL';
     } elseif (strpos($src, 'magic') !== false || strpos($src, '99acre') !== false || strpos($src, 'housing') !== false || strpos($src, 'portal') !== false || strpos($src, 'ms') !== false || strpos($src, 'meta source') !== false) {
         return 'MS';
@@ -702,6 +705,27 @@ function getLeadPrefix(?string $source = null, ?string $lead_type = null): strin
     }
     
     return 'FL';
+}
+
+/**
+ * Render Lead Type Badge (FL, CL, OL, MS)
+ */
+function renderLeadTypeBadge(?string $lead_type, ?string $source = null): string {
+    $type = !empty($lead_type) ? strtoupper(trim($lead_type)) : getLeadPrefix($source);
+    $b_style = 'font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; display: inline-flex; align-items: center; letter-spacing: 0.3px; line-height: 1.2;';
+    
+    switch ($type) {
+        case 'CL':
+            return '<span class="badge border" style="background-color: #ecfdf5; color: #065f46; border-color: #a7f3d0 !important; ' . $b_style . '"><i class="fa-solid fa-phone me-1" style="font-size: 8.5px;"></i>CL (Calling / IVR)</span>';
+        case 'FL':
+            return '<span class="badge border" style="background-color: #eff6ff; color: #1e40af; border-color: #bfdbfe !important; ' . $b_style . '"><i class="fa-brands fa-facebook me-1" style="font-size: 8.5px;"></i>FL (Meta Ads)</span>';
+        case 'OL':
+            return '<span class="badge border" style="background-color: #f5f3ff; color: #6b21a8; border-color: #ddd6fe !important; ' . $b_style . '"><i class="fa-solid fa-globe me-1" style="font-size: 8.5px;"></i>OL (Organic / Web)</span>';
+        case 'MS':
+            return '<span class="badge border" style="background-color: #fffbeb; color: #92400e; border-color: #fde68a !important; ' . $b_style . '"><i class="fa-solid fa-store me-1" style="font-size: 8.5px;"></i>MS (Portals)</span>';
+        default:
+            return '<span class="badge bg-light text-dark border" style="' . $b_style . '"><i class="fa-solid fa-tag me-1" style="font-size: 8.5px;"></i>' . htmlspecialchars($type) . '</span>';
+    }
 }
 
 /**

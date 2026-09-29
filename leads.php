@@ -714,10 +714,11 @@ if (empty($all_projects)) {
                                 <th style="width: 40px; text-align: center;" class="align-middle">
                                     <input type="checkbox" id="selectAllLeadRows" class="form-check-input" title="Select All Visible Leads" style="cursor: pointer; width: 17px; height: 17px;">
                                 </th>
+                                <th style="width: 50px; text-align: center;" class="text-nowrap">SN</th>
                                 <th style="min-width: 95px;">DATE</th>
                                 <th style="min-width: 130px;">LEADS</th>
                                 <th style="min-width: 140px;">LEAD CODE</th>
-                                <th style="min-width: 110px;">SERIAL NO</th>
+                                <th style="min-width: 110px;">CAMPAIGN NO</th>
                                 <th style="min-width: 130px;">CAMPAIGN NAME</th>
                                 <th style="min-width: 110px;">CITY</th>
                                 <th style="min-width: 180px;">NAME</th>
@@ -747,6 +748,7 @@ if (empty($all_projects)) {
                         <tbody>
                             <?php 
                             $all_tcs = $pdo->query("SELECT id, name FROM users WHERE role IN ('telecaller','sales') ORDER BY name ASC")->fetchAll();
+                            $row_sn = ($per_page > 0) ? (($page - 1) * $per_page + 1) : 1;
                             foreach($leads as $lead): 
                                 $days_elapsed = max(0, (int)floor((time() - strtotime($lead['created_at'])) / 86400));
                                 $clean_phone = preg_replace('/[^0-9]/', '', $lead['phone']);
@@ -764,6 +766,11 @@ if (empty($all_projects)) {
                                     <input type="checkbox" name="selected_lead_rows[]" value="<?php echo $lead['id']; ?>" class="form-check-input lead-row-cb" style="cursor: pointer; width: 17px; height: 17px;">
                                 </td>
 
+                                <!-- SN: Row Serial Number -->
+                                <td class="text-center align-middle text-muted fw-bold text-nowrap" style="width: 50px; font-size: 11px;">
+                                    <?php echo $row_sn++; ?>
+                                </td>
+
                                 <!-- 1. DATE -->
                                 <td class="text-center text-nowrap">
                                     <span class="text-dark fw-semibold" style="font-size: 11.5px;"><?php echo date('d-m-Y', strtotime($lead['created_at'])); ?></span>
@@ -775,6 +782,7 @@ if (empty($all_projects)) {
                                         <i class="fa-solid fa-building text-primary me-1" style="font-size: 10px;"></i><?php echo htmlspecialchars(getLeadProject($lead)); ?>
                                     </div>
                                     <div class="d-flex align-items-center gap-1 mt-1 flex-wrap">
+                                        <?php echo renderLeadTypeBadge($lead['lead_type'] ?? null, $lead['source']); ?>
                                         <?php echo renderSourceBadge($lead['source']); ?>
                                         <?php if (!empty($lead['campaign_name'])): ?>
                                             <a href="campaigns.php?search=<?php echo urlencode($lead['campaign_name']); ?>" class="badge bg-light text-muted border text-decoration-none" style="font-size: 9px; padding: 1.5px 5px; font-weight: 500; border-radius: 3px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1;" title="Ad Campaign: <?php echo htmlspecialchars($lead['campaign_name']); ?>">
