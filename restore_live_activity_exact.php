@@ -32,6 +32,7 @@ if (!isset($pdo)) {
 function normalizeDate($str) {
     if (empty($str)) return null;
     $str = trim($str);
+    if ($str === '' || $str === '0000-00-00 00:00:00' || $str === '0000-00-00') return null;
     $str = str_replace('T', ' ', $str);
     if (preg_match('/^(\d{2})-(\d{2})-(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/', $str, $dm)) {
         $d = $dm[1]; $m = $dm[2]; $y = $dm[3];
@@ -190,8 +191,19 @@ $existingLeads = $pdo->query("SELECT id, telecaller_id, status, remark_1, follow
 // If execute requested, run database updates
 $updateCount = 0;
 if ($execute) {
+    try {
+        $pdo->exec("SET SESSION sql_mode = 'NO_ENGINE_SUBSTITUTION'");
+    } catch (Exception $e) {}
+
     $pdo->beginTransaction();
     try {
+        // Clean legacy zero-dates to prevent strict mode errors
+        $pdo->exec("UPDATE leads SET followup_date = NULL WHERE followup_date = '0000-00-00 00:00:00'");
+        $pdo->exec("UPDATE leads SET follow_up_at = NULL WHERE follow_up_at = '0000-00-00 00:00:00'");
+        $pdo->exec("UPDATE leads SET followup_1 = NULL WHERE followup_1 = '0000-00-00 00:00:00'");
+        $pdo->exec("UPDATE leads SET followup_2 = NULL WHERE followup_2 = '0000-00-00 00:00:00'");
+        $pdo->exec("UPDATE leads SET followup_3 = NULL WHERE followup_3 = '0000-00-00 00:00:00'");
+
         $stmtUpdate = $pdo->prepare("
             UPDATE leads SET
                 telecaller_id = COALESCE(?, telecaller_id),
@@ -212,10 +224,11 @@ if ($execute) {
         foreach ($leadReconstruction as $lid => $rec) {
             if (!isset($existingLeads[$lid])) continue;
             
-            $f1 = normalizeDate($rec['followup_1']);
-            $f2 = normalizeDate($rec['followup_2']);
-            $f3 = normalizeDate($rec['followup_3']);
+            $f1 = normalizeDate($rec['followup_1']) ?: null;
+            $f2 = normalizeDate($rec['followup_2']) ?: null;
+            $f3 = normalizeDate($rec['followup_3']) ?: null;
             $fuEffective = $f1 ?: ($f2 ?: $f3);
+            if (!$fuEffective) $fuEffective = null;
             
             // Clean remark if not set from log
             $r1 = $rec['remark_1'] ?: cleanRemark($existingLeads[$lid]['remark_1'] ?? '');
@@ -223,18 +236,18 @@ if ($execute) {
             $status = normalizeStatus($rec['status'] ?: $existingLeads[$lid]['status']);
             
             $stmtUpdate->execute([
-                $rec['telecaller_id'],
+                $rec['telecaller_id'] ?: null,
                 $status,
                 $r1 ?: null,
-                $rec['remark_2'],
-                $rec['remark_3'],
+                $rec['remark_2'] ?: null,
+                $rec['remark_3'] ?: null,
                 $f1,
                 $f2,
                 $f3,
                 $fuEffective,
                 $fuEffective,
-                $rec['site_location'],
-                $rec['city'],
+                $rec['site_location'] ?: null,
+                $rec['city'] ?: null,
                 $lid
             ]);
             $updateCount++;
@@ -251,7 +264,7 @@ if ($execute) {
         $pdo->exec("
             UPDATE leads 
             SET followup_date = followup_1, follow_up_at = followup_1 
-            WHERE followup_1 IS NOT NULL AND (followup_date IS NULL OR followup_date = '')
+            WHERE followup_1 IS NOT NULL AND followup_date IS NULL
         ");
 
         $pdo->commit();
