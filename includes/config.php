@@ -2571,6 +2571,77 @@ function syncLeadToNetErp(PDO $pdo, int $lead_id, int $user_id): array {
 // Automatically trigger 24-hour inactivity check on inclusion
 checkAndReassignInactiveLeads24H($pdo);
 
+/**
+ * Return hex color code for lead status badge and styling.
+ */
+function getLeadStatusColor($status) {
+    switch (trim((string)$status)) {
+        case 'INT':
+        case 'Interested':
+            return '#16a34a'; // Vibrant Green
+        case 'NI':
+        case 'Not Interested':
+            return '#dc2626'; // Vibrant Red
+        case 'New':
+            return '#0284c7'; // Sky Blue
+        case 'In Progress':
+            return '#0891b2'; // Teal
+        case 'Follow Up':
+            return '#d97706'; // Amber Gold
+        case 'OTH Call Back':
+        case 'OTH_CALL_BACK':
+            return '#ea580c'; // Vibrant Orange
+        case 'Call Disconnect':
+        case 'Call Disconnected':
+            return '#e11d48'; // Rose Red / Coral
+        case 'OTH_BUSY':
+        case 'Busy / Callback':
+            return '#4f46e5'; // Indigo
+        case 'OTH_NOT_PICK':
+        case 'RNR (No Response)':
+            return '#7c3aed'; // Purple
+        case 'OTH_SWITCH_OFF':
+        case 'Switched Off':
+            return '#64748b'; // Slate Gray
+        case 'Incoming Off':
+            return '#78716c'; // Stone Gray
+        case 'Call Forwarding':
+            return '#0891b2'; // Cyan
+        case 'OS':
+        case 'Out of Service':
+            return '#475569'; // Dark Slate
+        case 'OTH_NETWORK':
+            return '#0d9488'; // Teal
+        case 'OTH':
+            return '#6b7280'; // Cool Gray
+        case 'Invalid Number':
+        case 'Wrong Number':
+            return '#9f1239'; // Crimson Dark Red
+        case 'Site Visit Scheduled':
+            return '#9333ea'; // Royal Violet
+        case 'Site Visit Done':
+            return '#059669'; // Emerald
+        case 'Re-Visit Scheduled':
+            return '#a855f7'; // Bright Violet
+        case 'Negotiation':
+            return '#c2410c'; // Deep Orange
+        case 'Assigned to Sales':
+        case 'Forward to Sales':
+            return '#2563eb'; // Royal Blue
+        case 'Booked / Token Paid':
+        case 'Booked / Token':
+            return '#15803d'; // Forest Green
+        case 'Converted':
+            return '#14532d'; // Deep Dark Green
+        case 'Dead':
+            return '#1e293b'; // Charcoal
+        case 'DND':
+            return '#0f172a'; // Pitch Black
+        default:
+            return '#0284c7'; // Default Sky Blue
+    }
+}
+
 
 
 

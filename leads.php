@@ -409,7 +409,7 @@ if (empty($all_projects)) {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=20260929_status_colors">
 </head>
 <body>
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -793,32 +793,32 @@ if (empty($all_projects)) {
 
                                 <!-- 10. STATUS-1 (Dropdown 1/4) -->
                                 <td>
-                                    <select class="excel-cell-select table-inline-status" data-lead-id="<?php echo $lead['id']; ?>" data-field="status" data-current-status="<?php echo htmlspecialchars($lead['status']); ?>">
-                                        <option value="INT" <?php echo ($lead['status'] === 'INT' || $lead['status'] === 'Interested' || $lead['status'] === 'In Progress') ? 'selected' : ''; ?>>INT</option>
-                                        <option value="NI" <?php echo ($lead['status'] === 'NI' || $lead['status'] === 'Not Interested') ? 'selected' : ''; ?>>NI</option>
-                                        <option value="Out of Service" <?php echo ($lead['status'] === 'Out of Service' || $lead['status'] === 'OS') ? 'selected' : ''; ?>>Out of Service</option>
-                                        <option value="Invalid Number" <?php echo ($lead['status'] === 'Invalid Number' || $lead['status'] === 'Wrong Number') ? 'selected' : ''; ?>>Invalid Number</option>
-                                        <option value="Incoming Off" <?php echo ($lead['status'] === 'Incoming Off') ? 'selected' : ''; ?>>Incoming Off</option>
-                                        <option value="OTH Call Back" <?php echo ($lead['status'] === 'OTH Call Back' || $lead['status'] === 'OTH_CALL_BACK') ? 'selected' : ''; ?>>OTH Call Back</option>
-                                        <option value="Call Forwarding" <?php echo ($lead['status'] === 'Call Forwarding') ? 'selected' : ''; ?>>Call Forwarding</option>
-                                        <option value="Call Disconnect" <?php echo ($lead['status'] === 'Call Disconnect' || $lead['status'] === 'Call Disconnected') ? 'selected' : ''; ?>>Call Disconnect</option>
-                                        <option value="OS" <?php echo $lead['status'] === 'OS' ? 'selected' : ''; ?>>OS</option>
-                                        <option value="OTH" <?php echo $lead['status'] === 'OTH' ? 'selected' : ''; ?>>OTH</option>
-                                        <option value="OTH_NOT_PICK" <?php echo ($lead['status'] === 'OTH_NOT_PICK' || $lead['status'] === 'RNR (No Response)') ? 'selected' : ''; ?>>OTH_NOT_PICK</option>
-                                        <option value="OTH_BUSY" <?php echo ($lead['status'] === 'OTH_BUSY' || $lead['status'] === 'Busy / Callback') ? 'selected' : ''; ?>>OTH_BUSY</option>
-                                        <option value="OTH_SWITCH_OFF" <?php echo ($lead['status'] === 'OTH_SWITCH_OFF' || $lead['status'] === 'Switched Off') ? 'selected' : ''; ?>>OTH_SWITCH_OFF</option>
-                                        <option value="OTH_NETWORK" <?php echo $lead['status'] === 'OTH_NETWORK' ? 'selected' : ''; ?>>OTH_NETWORK</option>
-                                        <option value="New" <?php echo $lead['status'] === 'New' ? 'selected' : ''; ?>>New</option>
-                                        <option value="Follow Up" <?php echo $lead['status'] === 'Follow Up' ? 'selected' : ''; ?>>Follow Up</option>
-                                        <option value="Site Visit Scheduled" <?php echo $lead['status'] === 'Site Visit Scheduled' ? 'selected' : ''; ?>>Site Visit Sched.</option>
-                                        <option value="Site Visit Done" <?php echo $lead['status'] === 'Site Visit Done' ? 'selected' : ''; ?>>Site Visit Done</option>
-                                        <option value="Re-Visit Scheduled" <?php echo $lead['status'] === 'Re-Visit Scheduled' ? 'selected' : ''; ?>>Re-Visit Sched.</option>
-                                        <option value="Negotiation" <?php echo $lead['status'] === 'Negotiation' ? 'selected' : ''; ?>>Negotiation</option>
-                                        <option value="Assigned to Sales" <?php echo ($lead['status'] === 'Assigned to Sales' || $lead['status'] === 'Forward to Sales') ? 'selected' : ''; ?>>Forward to Sales</option>
-                                        <option value="Booked / Token Paid" <?php echo ($lead['status'] === 'Booked / Token Paid' || $lead['status'] === 'Booked / Token') ? 'selected' : ''; ?>>Booked / Token</option>
-                                        <option value="Converted" <?php echo $lead['status'] === 'Converted' ? 'selected' : ''; ?>>Converted</option>
-                                        <option value="Dead" <?php echo $lead['status'] === 'Dead' ? 'selected' : ''; ?>>Dead</option>
-                                        <option value="DND" <?php echo $lead['status'] === 'DND' ? 'selected' : ''; ?>>DND</option>
+                                    <select class="excel-cell-select table-inline-status" data-lead-id="<?php echo $lead['id']; ?>" data-field="status" data-current-status="<?php echo htmlspecialchars($lead['status']); ?>" style="background-color: <?php echo getLeadStatusColor($lead['status']); ?> !important; color: #ffffff !important; font-weight: 700 !important; border-color: <?php echo getLeadStatusColor($lead['status']); ?> !important;">
+                                        <option value="INT" style="background-color:#16a34a !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'INT' || $lead['status'] === 'Interested' || $lead['status'] === 'In Progress') ? 'selected' : ''; ?>>🟢 INT</option>
+                                        <option value="NI" style="background-color:#dc2626 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'NI' || $lead['status'] === 'Not Interested') ? 'selected' : ''; ?>>🔴 NI</option>
+                                        <option value="Out of Service" style="background-color:#475569 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Out of Service' || $lead['status'] === 'OS') ? 'selected' : ''; ?>>⚪ Out of Service</option>
+                                        <option value="Invalid Number" style="background-color:#9f1239 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Invalid Number' || $lead['status'] === 'Wrong Number') ? 'selected' : ''; ?>>❌ Invalid Number</option>
+                                        <option value="Incoming Off" style="background-color:#78716c !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Incoming Off') ? 'selected' : ''; ?>>📵 Incoming Off</option>
+                                        <option value="OTH Call Back" style="background-color:#ea580c !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'OTH Call Back' || $lead['status'] === 'OTH_CALL_BACK') ? 'selected' : ''; ?>>🟠 OTH Call Back</option>
+                                        <option value="Call Forwarding" style="background-color:#0891b2 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Call Forwarding') ? 'selected' : ''; ?>>📞 Call Forwarding</option>
+                                        <option value="Call Disconnect" style="background-color:#e11d48 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Call Disconnect' || $lead['status'] === 'Call Disconnected') ? 'selected' : ''; ?>>📴 Call Disconnect</option>
+                                        <option value="OS" style="background-color:#475569 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'OS' ? 'selected' : ''; ?>>🔘 OS</option>
+                                        <option value="OTH" style="background-color:#6b7280 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'OTH' ? 'selected' : ''; ?>>◽ OTH</option>
+                                        <option value="OTH_NOT_PICK" style="background-color:#7c3aed !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'OTH_NOT_PICK' || $lead['status'] === 'RNR (No Response)') ? 'selected' : ''; ?>>🟣 OTH_NOT_PICK</option>
+                                        <option value="OTH_BUSY" style="background-color:#4f46e5 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'OTH_BUSY' || $lead['status'] === 'Busy / Callback') ? 'selected' : ''; ?>>🔷 OTH_BUSY</option>
+                                        <option value="OTH_SWITCH_OFF" style="background-color:#64748b !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'OTH_SWITCH_OFF' || $lead['status'] === 'Switched Off') ? 'selected' : ''; ?>>⚫ OTH_SWITCH_OFF</option>
+                                        <option value="OTH_NETWORK" style="background-color:#0d9488 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'OTH_NETWORK' ? 'selected' : ''; ?>>📶 OTH_NETWORK</option>
+                                        <option value="New" style="background-color:#0284c7 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'New' ? 'selected' : ''; ?>>🔵 New</option>
+                                        <option value="Follow Up" style="background-color:#d97706 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Follow Up' ? 'selected' : ''; ?>>🟡 Follow Up</option>
+                                        <option value="Site Visit Scheduled" style="background-color:#9333ea !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Site Visit Scheduled' ? 'selected' : ''; ?>>📍 Site Visit Sched.</option>
+                                        <option value="Site Visit Done" style="background-color:#059669 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Site Visit Done' ? 'selected' : ''; ?>>✅ Site Visit Done</option>
+                                        <option value="Re-Visit Scheduled" style="background-color:#a855f7 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Re-Visit Scheduled' ? 'selected' : ''; ?>>🔄 Re-Visit Sched.</option>
+                                        <option value="Negotiation" style="background-color:#c2410c !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Negotiation' ? 'selected' : ''; ?>>🤝 Negotiation</option>
+                                        <option value="Assigned to Sales" style="background-color:#2563eb !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Assigned to Sales' || $lead['status'] === 'Forward to Sales') ? 'selected' : ''; ?>>💼 Forward to Sales</option>
+                                        <option value="Booked / Token Paid" style="background-color:#15803d !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Booked / Token Paid' || $lead['status'] === 'Booked / Token') ? 'selected' : ''; ?>>💰 Booked / Token</option>
+                                        <option value="Converted" style="background-color:#14532d !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Converted' ? 'selected' : ''; ?>>🏆 Converted</option>
+                                        <option value="Dead" style="background-color:#1e293b !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Dead' ? 'selected' : ''; ?>>☠️ Dead</option>
+                                        <option value="DND" style="background-color:#0f172a !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'DND' ? 'selected' : ''; ?>>⛔ DND</option>
                                     </select>
                                 </td>
 
