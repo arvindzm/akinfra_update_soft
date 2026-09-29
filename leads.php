@@ -809,7 +809,17 @@ if (empty($all_projects)) {
                                 <!-- 7. NAME -->
                                 <td>
                                     <div class="d-flex align-items-center flex-wrap gap-1">
-                                        <span class="fw-bold text-dark text-nowrap"><?php echo htmlspecialchars($lead['name']); ?></span>
+                                        <div class="customer-name-wrapper d-inline-flex align-items-center" data-lead-id="<?php echo $lead['id']; ?>">
+                                            <span class="customer-name-text fw-bold text-dark text-nowrap"><?php echo htmlspecialchars($lead['name']); ?></span>
+                                            <button type="button" class="btn btn-xs btn-link text-muted p-0 ms-1 btn-edit-name" title="Edit Customer Name">
+                                                <i class="fa-solid fa-pen-to-square" style="font-size: 11px;"></i>
+                                            </button>
+                                            <div class="customer-name-edit-box d-none align-items-center gap-1">
+                                                <input type="text" class="form-control form-control-sm customer-name-input" value="<?php echo htmlspecialchars($lead['name']); ?>" style="width: 140px; height: 26px; font-size: 12px; font-weight: 600; padding: 2px 6px;">
+                                                <button type="button" class="btn btn-xs btn-success btn-save-name px-1 py-0" title="Save"><i class="fa-solid fa-check" style="font-size: 10px;"></i></button>
+                                                <button type="button" class="btn btn-xs btn-light border btn-cancel-name px-1 py-0" title="Cancel"><i class="fa-solid fa-xmark" style="font-size: 10px;"></i></button>
+                                            </div>
+                                        </div>
                                         <?php if(isset($dup_map[$clean_phone])): 
                                             $d_info = $dup_map[$clean_phone];
                                         ?>

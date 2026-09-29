@@ -752,4 +752,89 @@ window.toggleCampaign = function(campaignId, checkbox) {
     });
 })();
 
+// 6. Inline Customer Name Edit Handler (Telecaller & Admin)
+$(document).on('click', '.btn-edit-name', function (e) {
+    e.preventDefault();
+    var wrapper = $(this).closest('.customer-name-wrapper');
+    wrapper.find('.customer-name-text, .btn-edit-name').addClass('d-none');
+    var editBox = wrapper.find('.customer-name-edit-box');
+    editBox.removeClass('d-none').addClass('d-inline-flex');
+    var input = editBox.find('.customer-name-input');
+    input.focus().select();
+});
+
+$(document).on('click', '.btn-cancel-name', function (e) {
+    e.preventDefault();
+    var wrapper = $(this).closest('.customer-name-wrapper');
+    var originalName = wrapper.find('.customer-name-text').text();
+    wrapper.find('.customer-name-input').val(originalName);
+    wrapper.find('.customer-name-edit-box').removeClass('d-inline-flex').addClass('d-none');
+    wrapper.find('.customer-name-text, .btn-edit-name').removeClass('d-none');
+});
+
+function saveCustomerName(wrapper) {
+    var leadId = wrapper.data('lead-id');
+    var input = wrapper.find('.customer-name-input');
+    var newName = input.val().trim();
+    var oldName = wrapper.find('.customer-name-text').text();
+
+    if (!leadId || !newName) {
+        if (typeof showCrmToast === 'function') showCrmToast('Name cannot be empty', 'error');
+        else alert('Name cannot be empty');
+        return;
+    }
+
+    if (newName === oldName) {
+        wrapper.find('.customer-name-edit-box').removeClass('d-inline-flex').addClass('d-none');
+        wrapper.find('.customer-name-text, .btn-edit-name').removeClass('d-none');
+        return;
+    }
+
+    input.prop('disabled', true);
+    $.post('api/update_lead_cell.php', {
+        lead_id: leadId,
+        field_name: 'name',
+        field_value: newName
+    }, function (res) {
+        input.prop('disabled', false);
+        if (res && res.status === 'success') {
+            wrapper.find('.customer-name-text').text(newName);
+            wrapper.find('.customer-name-edit-box').removeClass('d-inline-flex').addClass('d-none');
+            wrapper.find('.customer-name-text, .btn-edit-name').removeClass('d-none');
+            
+            // Also update WhatsApp greeting link if present in row
+            var row = wrapper.closest('tr');
+            var waLink = row.find('a[href*="whatsapp.com"]');
+            if (waLink.length) {
+                var currentHref = waLink.attr('href');
+                waLink.attr('href', currentHref.replace(/text=Hello%20[^,]+,/, 'text=Hello%20' + encodeURIComponent(newName) + ','));
+            }
+
+            if (typeof showCrmToast === 'function') {
+                showCrmToast('Customer name updated successfully!', 'success');
+            }
+        } else {
+            var msg = (res && res.message) ? res.message : 'Error updating name';
+            if (typeof showCrmToast === 'function') showCrmToast(msg, 'error');
+            else alert(msg);
+        }
+    }).fail(function () {
+        input.prop('disabled', false);
+        if (typeof showCrmToast === 'function') showCrmToast('Server error while updating name', 'error');
+        else alert('Server error while updating name');
+    });
+}
+
+$(document).on('click', '.btn-save-name', function (e) {
+    e.preventDefault();
+    saveCustomerName($(this).closest('.customer-name-wrapper'));
+});
+
+$(document).on('keypress', '.customer-name-input', function (e) {
+    if (e.which === 13) {
+        e.preventDefault();
+        saveCustomerName($(this).closest('.customer-name-wrapper'));
+    }
+});
+
 
