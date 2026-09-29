@@ -808,7 +808,7 @@ if (empty($all_projects)) {
 
                                 <!-- 11. REMARK 1 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" value="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>" placeholder="Stage 1 remark..." title="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>">
+                                    <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" rows="2" placeholder="Stage 1 remark..." title="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>"><?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?></textarea>
                                 </td>
 
                                 <!-- 12. SITE LOCATION (Dropdown 2/4) -->
@@ -835,7 +835,7 @@ if (empty($all_projects)) {
 
                                 <!-- 14. REMARK 2 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_2" value="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>" placeholder="Stage 2 remark..." title="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>">
+                                    <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_2" rows="2" placeholder="Stage 2 remark..." title="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>"><?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?></textarea>
                                 </td>
 
                                 <!-- 15. FOLLOWUP 2 -->
@@ -845,7 +845,7 @@ if (empty($all_projects)) {
 
                                 <!-- 16. REMARK-3 -->
                                 <td>
-                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_3" value="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>" placeholder="Stage 3 remark..." title="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>">
+                                    <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_3" rows="2" placeholder="Stage 3 remark..." title="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>"><?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?></textarea>
                                 </td>
 
                                 <!-- 17. DAYS -->
@@ -877,7 +877,7 @@ if (empty($all_projects)) {
 
                                 <!-- 21. REMARK (Visit Feedback) -->
                                 <td>
-                                    <input type="text" class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_remark" value="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>" placeholder="Visit feedback..." title="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>">
+                                    <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_remark" rows="2" placeholder="Visit feedback..." title="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>"><?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?></textarea>
                                 </td>
 
                                 <!-- 22. DATE (Booking Date) -->

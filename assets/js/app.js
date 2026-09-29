@@ -329,6 +329,13 @@ $(document).ready(function () {
     });
 
     $(document).on('keypress', '.excel-cell-input', function (e) {
+        if ($(this).is('textarea')) {
+            if (e.which === 13 && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                $(this).blur();
+            }
+            return;
+        }
         if (e.which === 13) {
             e.preventDefault();
             $(this).blur();

@@ -1844,32 +1844,55 @@ select.table-inline-status:focus,
     box-shadow: 0 0 0 2px rgba(147, 39, 82, 0.2) !important;
 }
 
-/* Enhanced Wide Remark Cell Styling */
+/* Enhanced Wide Remark Cell Styling (Textarea & Input) */
 .excel-cell-remark {
     min-width: 260px !important;
-    font-size: 13px !important;
-    padding: 6px 10px !important;
+    width: 100% !important;
+    font-size: 12.5px !important;
+    line-height: 1.35 !important;
+    padding: 6px 9px !important;
     border-radius: 6px !important;
-    border: 1px solid #e2e8f0 !important;
+    border: 1px solid #d1d5db !important;
     background: #ffffff !important;
     color: #0f172a !important;
     font-weight: 500 !important;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    transition: border-color 0.2s, box-shadow 0.2s, height 0.2s !important;
+}
+
+textarea.excel-cell-remark {
+    height: 50px !important;
+    min-height: 48px !important;
+    max-height: 160px !important;
+    resize: vertical !important;
+    overflow-y: auto !important;
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+}
+
+textarea.excel-cell-remark::-webkit-scrollbar {
+    width: 5px;
+}
+textarea.excel-cell-remark::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 3px;
 }
 
 .excel-cell-remark:hover {
-    border-color: #cbd5e1 !important;
+    border-color: #94a3b8 !important;
     background: #f8fafc !important;
 }
 
 .excel-cell-remark:focus {
-    min-width: 380px !important;
     position: relative !important;
     z-index: 1050 !important;
     border-color: #932752 !important;
     box-shadow: 0 4px 18px rgba(147, 39, 82, 0.22) !important;
     background: #ffffff !important;
     outline: none !important;
+}
+
+textarea.excel-cell-remark:focus {
+    height: 75px !important;
 }
 
 .excel-cell-select:not(.table-inline-status) {
