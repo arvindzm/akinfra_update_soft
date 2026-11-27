@@ -6,6 +6,10 @@ if (isLoggedIn()) {
 }
 
 $error = '';
+if (isset($_SESSION['login_error'])) {
+    $error = $_SESSION['login_error'];
+    unset($_SESSION['login_error']);
+}
 $selected_role = 'admin';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -17,19 +21,27 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     if (empty($email) || empty($password)) {
         $error = 'Please enter both email and password.';
     } else {
-        $stmt = $pdo->prepare('SELECT id, name, email, password, role FROM users WHERE email = ?');
+        $stmt = $pdo->prepare('SELECT id, name, email, password, role, is_active FROM users WHERE email = ?');
         $stmt->execute([$email]);
         $user = $stmt->fetch();
 
         if ($user && password_verify($password, $user['password'])) {
-            
-            // STRICT ROLE VALIDATION
-            if ($user['role'] !== $login_role) {
-                $error = "Access Denied: Selected role is '" . ucfirst($login_role) . "' but this email belongs to '" . ucfirst($user['role']) . "'.";
+            // Check if user is disabled by admin
+            if (isset($user['is_active']) && (int)$user['is_active'] === 0) {
+                $error = '<i class="fa-solid fa-ban me-1 text-danger"></i> Access Denied: Your account has been Disabled by Admin. You cannot access the CRM system.';
+            } 
+            // Check office working hours for team members (exemptions, roles & overrides handled inside)
+            elseif (!isWithinOfficeHours($user)) {
+                $cfg = getOfficeHoursSettings();
+                $s_fmt = date('h:i A', strtotime($cfg['start_time']));
+                $e_fmt = date('h:i A', strtotime($cfg['end_time']));
+                $error = "<i class=\"fa-solid fa-lock me-1 text-warning\"></i> Office Hours Closed: CRM access for team members is strictly allowed during office hours ({$s_fmt} to {$e_fmt}). Only Admin has 24/7 access.";
             } else {
                 $_SESSION['user_id'] = $user['id'];
                 unset($user['password']);
                 $_SESSION['user'] = $user;
+                
+                logUserActivity($pdo, (int)$user['id'], 'login', 'User logged into CRM portal');
                 
                 redirect('index.php');
             }
@@ -235,9 +247,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             <div class="mb-3">
                 <label for="login_role" class="form-label">Login As</label>
                 <select class="form-select" id="login_role" name="login_role" required>
-                    <option value="admin" <?php echo ($selected_role === 'admin') ? 'selected' : ''; ?>>Admin</option>
-                    <option value="telecaller" <?php echo ($selected_role === 'telecaller') ? 'selected' : ''; ?>>Telecaller</option>
-                    <option value="sales" <?php echo ($selected_role === 'sales') ? 'selected' : ''; ?>>Salesperson</option>
+                    <option value="admin" <?php echo ($selected_role === 'admin') ? 'selected' : ''; ?>>Administrator (Admin)</option>
+                    <option value="sales_manager" <?php echo ($selected_role === 'sales_manager') ? 'selected' : ''; ?>>Sales Manager / Branch Head</option>
+                    <option value="telecaller" <?php echo ($selected_role === 'telecaller') ? 'selected' : ''; ?>>Telecaller / Pre-Sales Executive</option>
+                    <option value="sales" <?php echo ($selected_role === 'sales') ? 'selected' : ''; ?>>Sales Executive / Property Consultant</option>
                 </select>
             </div>
 

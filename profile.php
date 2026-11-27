@@ -82,57 +82,44 @@ $role = $user['role'];
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?php echo time(); ?>">
 </head>
 <body>
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
     <!-- Sidebar -->
-    <nav id="sidebar">
-        <div class="sidebar-header">
-            <img src="assets/images/logo-light.png" alt="" style="width:40%; filter: brightness(0) invert(1);">
-            <span>CRM Leads</span>
-        </div>
-        <ul class="list-unstyled components">
-            <li><a href="index.php"><i class="fa-solid fa-house"></i> <span class="nav-text">Dashboard</span></a></li>
-            <?php if($role === 'admin'): ?>
-                <li><a href="users.php"><i class="fa-solid fa-users"></i> <span class="nav-text">Team Management</span></a></li>
-                <li><a href="leads.php"><i class="fa-solid fa-database"></i> <span class="nav-text">All Leads</span></a></li>
-            <?php elseif($role === 'telecaller'): ?>
-                <li><a href="my_leads.php"><i class="fa-solid fa-database"></i> <span class="nav-text">My Assigned Leads</span></a></li>
-            <?php elseif($role === 'sales'): ?>
-                <li><a href="my_leads.php"><i class="fa-solid fa-database"></i> <span class="nav-text">My Pipeline Leads</span></a></li>
-            <?php endif; ?>
-        </ul>
-    </nav>
+    <?php include 'includes/sidebar.php'; ?>
 
     <!-- Main Content -->
     <div id="content">
         <!-- Top Navbar -->
         <div class="top-navbar">
-            <div class="d-flex align-items-center gap-3">
+            <div class="d-flex align-items-center gap-3 me-auto">
                 <button class="btn btn-light" id="sidebarToggle">
                     <i class="fa-solid fa-bars"></i>
                 </button>
-                <h2 class="page-title">My Profile</h2>
+                <h2 class="page-title mb-0">My Profile</h2>
             </div>
-            <div class="user-profile dropdown d-flex align-items-center">
-                <div class="me-2 text-end d-none d-md-block">
-                    <div class="fw-semibold lh-1"><?php echo htmlspecialchars($user['name']); ?></div>
-                    <small class="text-muted text-uppercase" style="font-size: 11px;"><?php echo htmlspecialchars($role); ?></small>
+            <div class="d-flex align-items-center gap-2 ms-auto">
+                <?php include 'includes/notifications.php'; ?>
+                <div class="user-profile dropdown d-flex align-items-center">
+                    <div class="me-2 text-end d-none d-md-block">
+                        <div class="fw-semibold lh-1"><?php echo htmlspecialchars($user['name']); ?></div>
+                        <small class="text-muted text-uppercase" style="font-size: 11px;"><?php echo htmlspecialchars($role); ?></small>
+                    </div>
+                    <div class="user-avatar" role="button" data-bs-toggle="dropdown" aria-expanded="false" style="padding: 0; border: none; background: transparent;">
+                        <?php if($user['profile_image'] && file_exists('uploads/profiles/'.$user['profile_image'])): ?>
+                            <img src="uploads/profiles/<?php echo htmlspecialchars($user['profile_image']); ?>" class="profile-img-sm">
+                        <?php else: ?>
+                            <div class="profile-placeholder-sm"><?php echo strtoupper(substr($user['name'], 0, 1)); ?></div>
+                        <?php endif; ?>
+                    </div>
+                    <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2">
+                        <li><a class="dropdown-item" href="profile.php"><i class="fa-solid fa-user me-2"></i>My Profile</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item text-danger" href="logout.php"><i class="fa-solid fa-right-from-bracket me-2"></i>Logout</a></li>
+                    </ul>
                 </div>
-                <div class="user-avatar" role="button" data-bs-toggle="dropdown" aria-expanded="false" style="padding: 0; border: none; background: transparent;">
-                    <?php if($user['profile_image'] && file_exists('uploads/profiles/'.$user['profile_image'])): ?>
-                        <img src="uploads/profiles/<?php echo htmlspecialchars($user['profile_image']); ?>" class="profile-img-sm">
-                    <?php else: ?>
-                        <div class="profile-placeholder-sm"><?php echo strtoupper(substr($user['name'], 0, 1)); ?></div>
-                    <?php endif; ?>
-                </div>
-                <ul class="dropdown-menu dropdown-menu-end shadow border-0 mt-2">
-                    <li><a class="dropdown-item" href="profile.php"><i class="fa-solid fa-user me-2"></i>My Profile</a></li>
-                    <li><hr class="dropdown-divider"></li>
-                    <li><a class="dropdown-item text-danger" href="logout.php"><i class="fa-solid fa-right-from-bracket me-2"></i>Logout</a></li>
-                </ul>
             </div>
         </div>
 
@@ -221,7 +208,7 @@ $role = $user['role'];
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="assets/js/app.js"></script>
+    <script src="assets/js/app.js?v=<?php echo time(); ?>"></script>
     <script>
         function togglePassword(inputId, iconElement) {
             const input = document.getElementById(inputId);

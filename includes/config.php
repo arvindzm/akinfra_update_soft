@@ -1,4 +1,7 @@
 <?php
+// Set Indian Standard Time (IST) globally
+date_default_timezone_set('Asia/Kolkata');
+
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -24,6 +27,11 @@ try {
     // Set the PDO error mode to exception
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+
+    // Synchronize MySQL time zone with Indian Standard Time (IST)
+    try {
+        $pdo->exec("SET time_zone = '+05:30'");
+    } catch (Throwable $e_tz) {}
 
 
     // Auto-create missing database master tables
@@ -218,7 +226,11 @@ try {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
     } catch(PDOException $e) {}
 } catch(PDOException $e) {
-    die("Database connection failed: " . $e->getMessage());
+    if (defined('TESTING_MODE') && TESTING_MODE === true) {
+        $pdo = null;
+    } else {
+        die("Database connection failed: " . $e->getMessage());
+    }
 }
 
 /**
@@ -384,6 +396,110 @@ function isWithinOfficeHours($check_user = null): bool {
     if ($current_time >= $start && $current_time <= $end) {
         return true;
     }
+    return false;
+}
+
+/**
+ * Standardize any datetime or date input into MySQL strict-mode compliant format:
+ * 'YYYY-MM-DD HH:MM:SS' or null if empty/invalid.
+ */
+function normalizeDbDateTime($val): ?string {
+    if ($val === null || trim((string)$val) === '') {
+        return null;
+    }
+    $clean = trim(str_replace('T', ' ', (string)$val));
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $clean)) {
+        return $clean . ' 00:00:00';
+    }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}$/', $clean)) {
+        return $clean . ':00';
+    }
+    if (preg_match('/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}$/', $clean)) {
+        return $clean;
+    }
+    $ts = strtotime($clean);
+    return ($ts !== false && $ts > 0) ? date('Y-m-d H:i:s', $ts) : null;
+}
+
+/**
+ * Determine if current user role has permission to inline-edit a specific lead column.
+ */
+function canUserEditLeadField(string $field_name, $user = null): bool {
+    if ($user === null) {
+        $user = getUser();
+    }
+    if (!$user || !isset($user['role'])) {
+        return false;
+    }
+    $role = $user['role'];
+    if ($role === 'admin') {
+        return true;
+    }
+
+    $telecaller_fields = [
+        'name',
+        'city',
+        'project',
+        'source',
+        'priority',
+        'influencer',
+        'meta_campaign_name',
+        'status',
+        'remark_1',
+        'tc2_status',
+        'tc2_remark',
+        'site_location',
+        'budget',
+        'upcoming_follow_up',
+        'followup_1',
+        'remark_2',
+        'followup_2',
+        'remark_3',
+        'followup_date',
+        'follow_up_at',
+        'visit_status',
+        'visit_date',
+        'visit_done'
+    ];
+
+    $happy_calling_fields = [
+        'happy_calling_date',
+        'happy_calling_status',
+        'happy_calling_remark'
+    ];
+
+    $sales_fields = [
+        'project',
+        'source',
+        'influencer',
+        'visit_date',
+        'visit_done',
+        'team_head',
+        'manager_name',
+        'visit_done_by',
+        'visit_remark',
+        'booking_date',
+        'registry_name',
+        'final_status_manager',
+        'final_status_date_manager',
+        'registry_unit_number',
+        'registry_area',
+        'registry_date',
+        'registry_status'
+    ];
+
+    if ($role === 'telecaller') {
+        return in_array($field_name, $telecaller_fields, true);
+    }
+
+    if (in_array($role, ['happy_calling', 'feedback'], true)) {
+        return in_array($field_name, $happy_calling_fields, true);
+    }
+
+    if (in_array($role, ['sales', 'sales_manager', 'manager'], true)) {
+        return in_array($field_name, $sales_fields, true);
+    }
+
     return false;
 }
 
@@ -581,6 +697,7 @@ function redistributeAllNewLeadsToPresentTelecallers($pdo) {
     $l_stmt = $pdo->query("
         SELECT id FROM leads 
         WHERE status = 'New' 
+          AND DATE(created_at) = CURDATE()
           AND id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)
         ORDER BY id ASC
     ");
@@ -990,6 +1107,9 @@ function autoAssignAllLeadsByProject($pdo) {
  * with ZERO activity/notes and status = 'New' to another active telecaller.
  */
 function checkAndReassignInactiveLeads24H($pdo) {
+    if (!$pdo) {
+        return 0;
+    }
     try {
         // Cutoff: 24 hours ago
         $cutoff = date('Y-m-d H:i:s', strtotime('-24 hours'));
@@ -1519,7 +1639,10 @@ function shuffleTelecallerLeads(
     ?string $project_override = null, 
     int $limit = 0,
     bool $reset_status_to_new = true,
-    array $specific_lead_ids = []
+    array $specific_lead_ids = [],
+    string $date_scope = 'all',
+    ?string $from_date = null,
+    ?string $to_date = null
 ): array {
     try {
         // 1. Validate Target Telecallers
@@ -1683,6 +1806,22 @@ function shuffleTelecallerLeads(
                 }
             }
 
+            // Date Scope Filtering (Crucial: Prevents historical leads from being shuffled when user targets today)
+            if ($date_scope === 'today') {
+                $conditions[] = "DATE(l.created_at) = CURDATE()";
+            } elseif ($date_scope === 'yesterday') {
+                $conditions[] = "DATE(l.created_at) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)";
+            } elseif ($date_scope === 'custom') {
+                if (!empty($from_date)) {
+                    $conditions[] = "DATE(l.created_at) >= ?";
+                    $params[] = $from_date;
+                }
+                if (!empty($to_date)) {
+                    $conditions[] = "DATE(l.created_at) <= ?";
+                    $params[] = $to_date;
+                }
+            }
+
             // Project Filter
             if (!empty($project_override)) {
                 $canon_proj = normalizeProjectName($project_override);
@@ -1747,6 +1886,11 @@ function shuffleTelecallerLeads(
             ");
         }
         $note_stmt = $pdo->prepare("INSERT INTO lead_notes (lead_id, user_id, note, created_at) VALUES (?, ?, ?, NOW())");
+        $log_history = $pdo->prepare("
+            INSERT INTO shuffled_leads_history 
+            (lead_id, from_telecaller_id, to_telecaller_id, shuffled_by, previous_status, previous_remarks, new_status, shuffled_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'New', NOW())
+        ");
         
         $admin_id = $_SESSION['user_id'] ?? 1;
         $shuffled_count = 0;
@@ -1759,6 +1903,8 @@ function shuffleTelecallerLeads(
 
             $update_stmt->execute([$target_id, $lead['id']]);
 
+            $from_tc_id = !empty($lead['telecaller_id']) ? (int)$lead['telecaller_id'] : null;
+
             if ($reset_status_to_new) {
                 // Collect and archive previous remarks into notes so no data is ever lost
                 $prev_notes = [];
@@ -1768,8 +1914,29 @@ function shuffleTelecallerLeads(
                 $prev_remarks_str = !empty($prev_notes) ? " | Previous Notes by [{$old_name}]: (" . implode('; ', $prev_notes) . ")" : "";
 
                 $log_note = "🔀 LEAD SHUFFLED: Reassigned from [{$old_name}] to [{$new_name}] by Admin for fresh calling. (Previous Status: {$lead['status']}{$prev_remarks_str} → Reset to 'New' with fresh blank remarks for {$new_name})";
+                
+                try {
+                    $log_history->execute([
+                        $lead['id'],
+                        $from_tc_id,
+                        $target_id,
+                        $admin_id,
+                        $lead['status'] ?? 'New',
+                        !empty($prev_notes) ? implode('; ', $prev_notes) : ($lead['remark_1'] ?? null)
+                    ]);
+                } catch (Throwable $e_shh) {}
             } else {
                 $log_note = "🔀 LEAD SHUFFLED: Reassigned from [{$old_name}] to [{$new_name}] by Admin for re-verification & calling (Status: {$lead['status']})";
+                try {
+                    $log_history->execute([
+                        $lead['id'],
+                        $from_tc_id,
+                        $target_id,
+                        $admin_id,
+                        $lead['status'] ?? 'New',
+                        $lead['remark_1'] ?? null
+                    ]);
+                } catch (Throwable $e_shh) {}
             }
             $note_stmt->execute([$lead['id'], $admin_id, $log_note]);
 
@@ -2608,7 +2775,7 @@ function syncLeadToNetErp(PDO $pdo, int $lead_id, int $user_id): array {
 }
 
 // Automatically trigger 24-hour inactivity check on inclusion
-checkAndReassignInactiveLeads24H($pdo);
+// checkAndReassignInactiveLeads24H($pdo); // Disabled on page load to prevent unintended redistribution
 
 /**
  * Return hex color code for lead status badge and styling.
@@ -2684,3 +2851,1501 @@ function getLeadStatusColor($status) {
 
 
 
+
+
+// =========================================================================
+// CRM HELPER FUNCTIONS (Projects, Sources, Campaigns, Statuses, Roles, Schema)
+// =========================================================================
+
+/**
+ * Canonicalize and deduplicate CRM Project, Campaign, and Source names
+ * Maps messy upload variations (e.g. OLD_DATA, OLD_LEADS -> OLD DATA; India_Mart -> IndiaMART; FRESH_LEADS -> Fresh Leads)
+ */
+if (!function_exists('canonicalizeCrmName')) {
+    function canonicalizeCrmName(?string $raw): string {
+        if (empty($raw)) return '';
+        $raw = trim($raw);
+        
+        // Discard pure phone numbers or numeric IDs (e.g. 7460003172, 8881111852)
+        if (preg_match('/^[0-9+\s\-]{6,}$/', $raw)) return '';
+
+        // Replace multiple spaces and underscores with single space for analysis
+        $clean = preg_replace('/[_\s]+/', ' ', $raw);
+        $lower = strtolower($clean);
+
+        // 1. Old Data variations -> "OLD DATA"
+        if (
+            $lower === 'old data' || $lower === 'old_data' || $lower === 'old leads' || $lower === 'old_leads' ||
+            $lower === 'old' || preg_match('/\bold[\s_-]*(data|leads|lead)\b/i', $clean)
+        ) {
+            return 'OLD DATA';
+        }
+
+        // 2. IndiaMART variations -> "IndiaMART"
+        if (preg_match('/^india[\s_-]*mart$/i', $clean) || $lower === 'indiamart') {
+            return 'IndiaMART';
+        }
+
+        // 3. Fresh Leads variations
+        if (preg_match('/^fresh[\s_-]*(leads|lead)$/i', $clean)) {
+            return 'Fresh Leads';
+        }
+
+        // 4. Facebook / Facebook Ads
+        if (preg_match('/^facebook(\s+ads?)?$/i', $clean) || $lower === 'fb lead' || $lower === 'fb leads') {
+            return 'Facebook Ads';
+        }
+
+        // 5. Google Ads
+        if (preg_match('/^google(\s+ads?)?$/i', $clean)) {
+            return 'Google Ads';
+        }
+
+        // 6. IVR Leads / Calling
+        if (preg_match('/^ivr[\s_-]*(leads|lead)?$/i', $clean) || $lower === 'calling (ivr)') {
+            return 'IVR Leads';
+        }
+        if (preg_match('/^ivr[\s_-]*old$/i', $clean)) {
+            return 'IVR Old';
+        }
+
+        // 7. Standard Projects (Project A, B, C, D, E)
+        if (preg_match('/^project[\s_-]*([a-e])$/i', $clean, $m)) {
+            return 'Project ' . strtoupper($m[1]);
+        }
+
+        return $clean;
+    }
+}
+
+/**
+ * Returns all raw database variations that map to this canonical name
+ * Used in SQL WHERE clauses so filtering by "OLD DATA" matches 'OLD DATA', 'OLD_DATA', 'OLD_LEADS', etc.!
+ */
+if (!function_exists('getCrmFilterVariants')) {
+    function getCrmFilterVariants(string $canonical): array {
+        $canonical = trim($canonical);
+        if (empty($canonical)) return [];
+
+        $variants = [$canonical];
+        $lower = strtolower($canonical);
+
+        if ($lower === 'old data' || $lower === 'old_data' || $lower === 'old leads' || $lower === 'old_leads') {
+            $variants = [
+                'OLD DATA', 'OLD_DATA', 'OLD_LEADS', 'old data', 'old_data', 
+                'old leads', 'old_leads', 'Old Data', 'Old Leads'
+            ];
+        } elseif ($lower === 'indiamart' || $lower === 'india mart' || $lower === 'india_mart') {
+            $variants = ['IndiaMART', 'India Mart', 'India_Mart', 'indiamart', 'india mart', 'india_mart'];
+        } elseif ($lower === 'fresh leads' || $lower === 'fresh_leads') {
+            $variants = ['Fresh Leads', 'FRESH LEADS', 'FRESH_LEADS', 'Fresh leads', 'fresh_leads', 'Fresh lead', 'FRESH LEAD', 'fresh leads'];
+        } elseif ($lower === 'facebook ads' || $lower === 'facebook') {
+            $variants = ['Facebook Ads', 'Facebook', 'Facebook_Ads', 'facebook', 'facebook ads', 'FB Lead', 'FB Leads', 'fb lead', 'fb leads'];
+        } elseif ($lower === 'ivr leads' || $lower === 'ivr_leads') {
+            $variants = ['IVR Leads', 'IVR_LEADS', 'ivr leads', 'Calling (IVR)', 'ivr_leads'];
+        } elseif ($lower === 'ivr old' || $lower === 'ivr_old') {
+            $variants = ['IVR Old', 'IVR_OLD', 'ivr old', 'ivr_old'];
+        }
+
+        $variants[] = str_replace(' ', '_', $canonical);
+        $variants[] = str_replace('_', ' ', $canonical);
+
+        return array_values(array_unique(array_filter($variants)));
+    }
+}
+
+/**
+ * Master List of CRM Projects
+ * Returns only valid, clean canonical project names (deduplicated).
+ * Strictly filters out any phone numbers, numeric IDs, or malformed entries.
+ */
+if (!function_exists('getCrmProjectsList')) {
+    function getCrmProjectsList($pdo = null): array {
+        $projects = [];
+
+        // 1. Defined projects from project_mappings.json if exists
+        $mapping_file = __DIR__ . '/project_mappings.json';
+        if (file_exists($mapping_file)) {
+            $json_data = @json_decode(file_get_contents($mapping_file), true);
+            if (is_array($json_data)) {
+                foreach (array_keys($json_data) as $cp) {
+                    $canon = canonicalizeCrmName($cp);
+                    if (!empty($canon)) {
+                        $projects[$canon] = $canon;
+                    }
+                }
+            }
+        }
+
+        if ($pdo) {
+            // Auto-merge legacy variations
+            static $cleaned_once = false;
+            if (!$cleaned_once) {
+                try {
+                    $pdo->exec("UPDATE leads SET project = 'OLD DATA' WHERE project IN ('OLD_DATA', 'OLD_LEADS', 'old data', 'old_data', 'old leads', 'old_leads')");
+                    $pdo->exec("UPDATE leads SET source = 'OLD DATA' WHERE source IN ('OLD_DATA', 'OLD_LEADS', 'old data', 'old_data', 'old leads', 'old_leads')");
+                    $cleaned_once = true;
+                } catch (Throwable $e) {}
+            }
+
+            // 2. From project_assignments table
+            try {
+                $pa_rows = $pdo->query("SELECT DISTINCT project_name FROM project_assignments WHERE project_name IS NOT NULL AND project_name != ''")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($pa_rows as $p) {
+                    $canon = canonicalizeCrmName($p);
+                    if (!empty($canon)) {
+                        $projects[$canon] = $canon;
+                    }
+                }
+            } catch (Throwable $e) {}
+
+            // 3. From ad_campaigns table
+            try {
+                $ac_rows = $pdo->query("SELECT DISTINCT project_name FROM ad_campaigns WHERE project_name IS NOT NULL AND project_name != ''")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($ac_rows as $p) {
+                    $canon = canonicalizeCrmName($p);
+                    if (!empty($canon)) {
+                        $projects[$canon] = $canon;
+                    }
+                }
+            } catch (Throwable $e) {}
+
+            // 4. From projects master table if exists
+            try {
+                $pm_rows = $pdo->query("SELECT DISTINCT name FROM projects WHERE name IS NOT NULL AND name != ''")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($pm_rows as $p) {
+                    $canon = canonicalizeCrmName($p);
+                    if (!empty($canon)) {
+                        $projects[$canon] = $canon;
+                    }
+                }
+            } catch (Throwable $e) {}
+
+            // 5. From leads table
+            try {
+                $lead_rows = $pdo->query("SELECT DISTINCT project FROM leads WHERE project IS NOT NULL AND project != '' AND project != 'N/A'")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($lead_rows as $p) {
+                    $canon = canonicalizeCrmName($p);
+                    if (!empty($canon)) {
+                        $projects[$canon] = $canon;
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
+
+        if (empty($projects)) {
+            $projects = [
+                'Project A' => 'Project A',
+                'Project B' => 'Project B',
+                'Project C' => 'Project C',
+                'Project D' => 'Project D',
+                'Project E' => 'Project E',
+            ];
+        }
+
+        ksort($projects);
+        return array_values($projects);
+    }
+}
+
+/**
+ * Master List of CRM Lead Sources
+ * Returns clean marketing channel and source names (deduplicated).
+ */
+if (!function_exists('getCrmSourcesList')) {
+    function getCrmSourcesList($pdo = null): array {
+        $sources = [];
+
+        $standard = [
+            'Calling (IVR / Telecaller)',
+            'Facebook Ads',
+            'Instagram Ads',
+            'Meta Direct Ads',
+            'Google Ads',
+            'IndiaMART',
+            '99acres',
+            'Website',
+            'Excel Import',
+            'OLD DATA',
+            'Walk-in',
+            'Referral'
+        ];
+        foreach ($standard as $s) {
+            $canon = canonicalizeCrmName($s);
+            if (!empty($canon)) {
+                $sources[$canon] = $canon;
+            }
+        }
+
+        if ($pdo) {
+            try {
+                $rows = $pdo->query("SELECT DISTINCT source FROM leads WHERE source IS NOT NULL AND source != ''")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($rows as $s) {
+                    $canon = canonicalizeCrmName($s);
+                    if (!empty($canon)) {
+                        $sources[$canon] = $canon;
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
+
+        ksort($sources);
+        return array_values($sources);
+    }
+}
+
+/**
+ * Master List of CRM Campaigns
+ * Returns authentic campaign names from ad_campaigns, meta_campaign_name, and influencer (deduplicated).
+ */
+if (!function_exists('getCrmCampaignsList')) {
+    function getCrmCampaignsList($pdo = null): array {
+        $campaigns = [];
+
+        if ($pdo) {
+            try {
+                $ac = $pdo->query("SELECT DISTINCT TRIM(campaign_name) FROM ad_campaigns WHERE campaign_name IS NOT NULL AND campaign_name != ''")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($ac as $c) {
+                    $canon = canonicalizeCrmName($c);
+                    if (!empty($canon)) {
+                        $campaigns[$canon] = $canon;
+                    }
+                }
+            } catch (Throwable $e) {}
+
+            try {
+                $l_rows = $pdo->query("
+                    SELECT DISTINCT TRIM(meta_campaign_name) as cname FROM leads WHERE meta_campaign_name IS NOT NULL AND meta_campaign_name != ''
+                    UNION 
+                    SELECT DISTINCT TRIM(influencer) as cname FROM leads WHERE influencer IS NOT NULL AND influencer != ''
+                ")->fetchAll(PDO::FETCH_COLUMN);
+                foreach ($l_rows as $c) {
+                    $canon = canonicalizeCrmName($c);
+                    if (!empty($canon)) {
+                        $campaigns[$canon] = $canon;
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
+
+        ksort($campaigns);
+        return array_values($campaigns);
+    }
+}
+
+/**
+ * Clean helper to return genuine site_location (excludes numeric telephone garbage)
+ */
+if (!function_exists('getLeadSiteLocation')) {
+    function getLeadSiteLocation($lead): string {
+        if (!is_array($lead)) return '';
+        $sloc = trim((string)($lead['site_location'] ?? ''));
+        if (preg_match('/^[0-9+\s\-]{7,15}$/', $sloc)) {
+            return '';
+        }
+        return $sloc;
+    }
+}
+
+/**
+ * Master definition of Strict CRM Lead Statuses with display labels and hex colors
+ */
+if (!function_exists('getStrictLeadStatuses')) {
+    function getStrictLeadStatuses(): array {
+        return [
+            'NEW'                   => ['color' => '#0284c7', 'label' => 'New'],
+            'INT'                   => ['color' => '#16a34a', 'label' => 'Interested (INT)'],
+            'INT_VISIT_DONE'        => ['color' => '#059669', 'label' => 'Visit Done'],
+            'NI'                    => ['color' => '#dc2626', 'label' => 'Not Interested (NI)'],
+            'NI_FO'                 => ['color' => '#b91c1c', 'label' => 'NI Follow-up'],
+            'OS'                    => ['color' => '#475569', 'label' => 'Other Site (OS)'],
+            'OTH'                   => ['color' => '#6b7280', 'label' => 'Other'],
+            'OTH_NOT_PICK'          => ['color' => '#7c3aed', 'label' => 'Not Picked'],
+            'OTH_BUSY'              => ['color' => '#4f46e5', 'label' => 'Busy'],
+            'OTH_SWITCH_OFF'        => ['color' => '#64748b', 'label' => 'Switch Off'],
+            'OTH_NETWORK_ISSUE'     => ['color' => '#0d9488', 'label' => 'Network Issue'],
+            'OTH_CALL_BACK'         => ['color' => '#ea580c', 'label' => 'Call Back'],
+            'OTH_INCOMING_OFF'      => ['color' => '#78716c', 'label' => 'Incoming Off'],
+            'OTH_CALL_DISCONNECTED' => ['color' => '#e11d48', 'label' => 'Call Disconnected'],
+            'OTH_INVALID_NUMBER'    => ['color' => '#9f1239', 'label' => 'Invalid Number'],
+            'OTH_OUT_OF_SERVICE'    => ['color' => '#334155', 'label' => 'Out of Service'],
+            'OTH_CALL_FORWARDED'    => ['color' => '#0891b2', 'label' => 'Call Forwarded']
+        ];
+    }
+}
+
+/**
+ * Normalizes any free-form status string to canonical strict status
+ */
+if (!function_exists('normalizeLeadStatus')) {
+    function normalizeLeadStatus($status): string {
+        $st = trim((string)$status);
+        if ($st === '' || strtolower($st) === 'new' || strtolower($st) === 'fresh' || strtolower($st) === 'fresh lead' || strtolower($st) === 'untouched') {
+            return 'NEW';
+        }
+
+        $strict = getStrictLeadStatuses();
+        if (isset($strict[$st])) {
+            return $st;
+        }
+
+        $upper = strtoupper($st);
+        if (isset($strict[$upper])) {
+            return $upper;
+        }
+
+        switch ($upper) {
+            case 'FRESH':
+            case 'FRESH LEAD':
+            case 'UNTOUCHED':
+            case 'NEW':
+                return 'NEW';
+
+            case 'SITE VISIT DONE':
+            case 'BOOKED / TOKEN PAID':
+            case 'BOOKED / TOKEN':
+            case 'CONVERTED':
+            case 'VISIT DONE':
+            case 'REGISTERED':
+                return 'INT_VISIT_DONE';
+
+            case 'SITE VISIT SCHEDULED':
+            case 'IN PROGRESS':
+            case 'INTERESTED':
+            case 'NEGOTIATION':
+            case 'ASSIGNED TO SALES':
+            case 'FORWARD TO SALES':
+            case 'SITE VISIT':
+            case 'RE-VISIT SCHEDULED':
+                return 'INT';
+
+            case 'FOLLOW UP':
+            case 'FOLLOWUP':
+            case 'FOLLOW-UP':
+            case 'OTH CALL BACK':
+            case 'CALL BACK':
+            case 'CALLBACK':
+                return 'OTH_CALL_BACK';
+
+            case 'NOT INTERESTED':
+            case 'DEAD':
+            case 'DND':
+            case 'BUDGET ISSUE':
+            case 'LOCATION MISMATCH':
+                return 'NI';
+
+            case 'OUT OF STATION':
+            case 'OTHER SITE':
+                return 'OS';
+
+            case 'NOT PICKED':
+            case 'NOT PICK':
+            case 'RNR':
+            case 'RNR (NO RESPONSE)':
+                return 'OTH_NOT_PICK';
+
+            case 'BUSY':
+                return 'OTH_BUSY';
+
+            case 'SWITCH OFF':
+            case 'SWITCHED OFF':
+                return 'OTH_SWITCH_OFF';
+
+            case 'NETWORK':
+            case 'NETWORK ISSUE':
+                return 'OTH_NETWORK_ISSUE';
+
+            case 'INCOMING OFF':
+                return 'OTH_INCOMING_OFF';
+
+            case 'CALL DISCONNECTED':
+            case 'DISCONNECTED':
+                return 'OTH_CALL_DISCONNECTED';
+
+            case 'INVALID NUMBER':
+            case 'WRONG NUMBER':
+                return 'OTH_INVALID_NUMBER';
+
+            case 'OUT OF SERVICE':
+                return 'OTH_OUT_OF_SERVICE';
+
+            case 'CALL FORWARDED':
+            case 'CALL FORWARDING':
+                return 'OTH_CALL_FORWARDED';
+
+            case 'NI_FO':
+            case 'NI FOLLOW UP':
+                return 'NI_FO';
+
+            case 'OTHER':
+            default:
+                return 'OTH';
+        }
+    }
+}
+
+/**
+ * Role checking helpers
+ */
+if (!function_exists('isAdmin')) {
+    function isAdmin($user = null): bool {
+        if ($user === null) {
+            $user = function_exists('getUser') ? getUser() : ($_SESSION['user'] ?? null);
+        }
+        return ($user && isset($user['role']) && $user['role'] === 'admin');
+    }
+}
+
+if (!function_exists('isSalesManager')) {
+    function isSalesManager($user = null): bool {
+        if ($user === null) {
+            $user = function_exists('getUser') ? getUser() : ($_SESSION['user'] ?? null);
+        }
+        return ($user && isset($user['role']) && in_array($user['role'], ['sales_manager', 'manager'], true));
+    }
+}
+
+/**
+ * Senior Telecaller Detection and Round-Robin Distribution Helpers
+ */
+if (!function_exists('isSeniorTelecaller')) {
+    function isSeniorTelecaller($user = null): bool {
+        if ($user === null && function_exists('getUser')) {
+            $user = getUser();
+        }
+        if (!is_array($user)) return false;
+        
+        $role = strtolower(trim($user['role'] ?? ''));
+        // Only telecallers can be Senior Telecallers
+        if ($role !== 'telecaller' && $role !== 'senior_telecaller') {
+            return false;
+        }
+
+        $name = strtolower(trim($user['name'] ?? ''));
+        $desig = strtolower(trim($user['designation'] ?? ''));
+        
+        // Strictly Rakesh or explicit "Senior Telecaller" designation/role
+        // (Does NOT match normal telecallers like Kanak)
+        return (
+            strpos($name, 'rakesh') !== false 
+            || strpos($desig, 'senior telecaller') !== false 
+            || strpos($desig, 'sr. telecaller') !== false 
+            || strpos($desig, 'sr telecaller') !== false 
+            || $role === 'senior_telecaller'
+        );
+    }
+}
+
+if (!function_exists('getActiveSeniorTelecallers')) {
+    function getActiveSeniorTelecallers($pdo = null): array {
+        if (!$pdo) {
+            global $pdo;
+        }
+        if (!$pdo) return [];
+        try {
+            $stmt = $pdo->query("
+                SELECT id, name, email, designation 
+                FROM users 
+                WHERE (role = 'telecaller' OR role = 'senior_telecaller') 
+                  AND (is_active = 1 OR is_active IS NULL)
+                  AND (
+                      LOWER(COALESCE(name, '')) LIKE '%rakesh%' 
+                      OR LOWER(COALESCE(designation, '')) LIKE '%senior telecaller%' 
+                      OR LOWER(COALESCE(designation, '')) LIKE '%sr. telecaller%'
+                      OR LOWER(COALESCE(designation, '')) LIKE '%sr telecaller%'
+                      OR role = 'senior_telecaller'
+                  )
+                ORDER BY id ASC
+            ");
+            return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+}
+
+if (!function_exists('getSeniorTelecallerRoundRobinSql')) {
+    function getSeniorTelecallerRoundRobinSql($pdo, $user_id, $table_alias = 'l'): string {
+        $seniors = getActiveSeniorTelecallers($pdo);
+        $total = count($seniors);
+        if ($total <= 1) {
+            return "1=1";
+        }
+        $user_index = -1;
+        foreach ($seniors as $idx => $stc) {
+            if ((int)$stc['id'] === (int)$user_id) {
+                $user_index = $idx;
+                break;
+            }
+        }
+        if ($user_index === -1) {
+            return "1=1";
+        }
+        return "MOD({$table_alias}.id, {$total}) = {$user_index}";
+    }
+}
+
+if (!function_exists('getAssignedSeniorTelecallerForLead')) {
+    function getAssignedSeniorTelecallerForLead($lead_id, $pdo = null) {
+        if (!$pdo) {
+            global $pdo;
+        }
+        $seniors = getActiveSeniorTelecallers($pdo);
+        if (empty($seniors)) return null;
+        $total = count($seniors);
+        if ($total === 1) return $seniors[0];
+        $idx = ((int)$lead_id) % $total;
+        return $seniors[$idx] ?? $seniors[0];
+    }
+}
+
+/**
+ * 30-Day Lead Validity Timer Badge for Telecallers & Admin
+ */
+if (!function_exists('getLeadValidityBadgeHtml')) {
+    function getLeadValidityBadgeHtml($lead, $for_role = null): string {
+        if (!is_array($lead)) return '';
+        
+        $status = strtoupper(trim((string)($lead['status'] ?? '')));
+        $is_permanent = in_array($status, [
+            'CONVERTED', 
+            'BOOKED', 
+            'BOOKED / TOKEN PAID', 
+            'INT_VISIT_DONE', 
+            'SITE VISIT DONE', 
+            'SITE VISIT SCHEDULED', 
+            'RE-VISIT SCHEDULED'
+        ])
+        || (!empty($lead['visit_done']) && in_array(strtoupper(trim((string)$lead['visit_done'])), ['YES', '1', 'DONE']))
+        || (!empty($lead['site_visit_status']) && strcasecmp(trim((string)$lead['site_visit_status']), 'Completed') === 0)
+        || (!empty($lead['visit_status']) && (stripos((string)$lead['visit_status'], 'yes') !== false || stripos((string)$lead['visit_status'], 'visit') !== false));
+
+        if ($is_permanent) {
+            $badge_title = in_array($status, ['INT_VISIT_DONE', 'SITE VISIT DONE']) ? "Site Visit Completed - Permanent Lead" : (in_array($status, ['CONVERTED', 'BOOKED', 'BOOKED / TOKEN PAID']) ? "Permanent Deal" : "Site Visit Scheduled - Permanent Lead");
+            return '<span class="badge" style="background-color:#ecfdf5 !important; color:#047857 !important; border:1px solid #10b981 !important; font-size:10px !important; font-weight:700 !important; padding:2px 6px !important; border-radius:4px !important; display:inline-block !important;" title="' . $badge_title . '"><i class="fa-solid fa-shield-halved me-1"></i>Permanent</span>';
+        }
+
+        $dt = !empty($lead['created_at']) ? $lead['created_at'] : null;
+        if (!$dt) {
+            return '<span class="badge" style="background-color:#f1f5f9 !important; color:#475569 !important; border:1px solid #cbd5e1 !important; font-size:10px !important; font-weight:700 !important; padding:2px 6px !important; border-radius:4px !important; display:inline-block !important;">--</span>';
+        }
+
+        $days_passed = (int)floor((time() - strtotime($dt)) / 86400);
+        $days_left = max(0, 30 - $days_passed);
+
+        if ($days_left <= 0) {
+            return '<span class="badge" style="background-color:#fef2f2 !important; color:#dc2626 !important; border:1px solid #f87171 !important; font-size:10px !important; font-weight:700 !important; padding:2px 6px !important; border-radius:4px !important; display:inline-block !important;" title="Expired: Over 30 days"><i class="fa-solid fa-triangle-exclamation me-1"></i>Expired</span>';
+        } elseif ($days_left <= 3) {
+            return '<span class="badge" style="background-color:#fff7ed !important; color:#c2410c !important; border:1px solid #fb923c !important; font-size:10px !important; font-weight:700 !important; padding:2px 6px !important; border-radius:4px !important; display:inline-block !important;" title="' . $days_left . ' days remaining"><i class="fa-solid fa-clock me-1"></i>' . $days_left . ' Days Left</span>';
+        } else {
+            return '<span class="badge" style="background-color:#eff6ff !important; color:#1d4ed8 !important; border:1px solid #93c5fd !important; font-size:10px !important; font-weight:700 !important; padding:2px 6px !important; border-radius:4px !important; display:inline-block !important;" title="' . $days_left . ' days remaining"><i class="fa-solid fa-shield-halved me-1"></i>' . $days_left . ' Days Left</span>';
+        }
+    }
+}
+
+/**
+ * Lead Attribution and Reassignment Badges
+ */
+if (!function_exists('getTelecallerLeadTypeBadgeHtml')) {
+    function getTelecallerLeadTypeBadgeHtml($lead, $sh_info = null): string {
+        $is_reassigned = false;
+        if (!empty($sh_info)) {
+            $is_reassigned = true;
+        } elseif (!empty($lead['shuffled_from_name']) || !empty($lead['shuffled_to_name']) || !empty($lead['is_15d_reassigned']) || !empty($lead['is_30d_reassigned'])) {
+            $is_reassigned = true;
+        }
+
+        if ($is_reassigned) {
+            return '<span class="badge shadow-xs" style="background-color: #fffbeb !important; color: #b45309 !important; border: 1px solid #fde68a !important; font-size: 9.5px !important; font-weight: 700 !important; padding: 2px 6px !important; border-radius: 4px !important; display: inline-block !important;" title="30+ din purani unclosed INT lead jo re-verification aur fresh calling ke liye mili hai"><i class="fa-solid fa-arrows-rotate me-1 text-warning"></i>30-Day Reassigned</span>';
+        } else {
+            return '<span class="badge shadow-xs" style="background-color: #f0fdf4 !important; color: #15803d !important; border: 1px solid #bbf7d0 !important; font-size: 9.5px !important; font-weight: 700 !important; padding: 2px 6px !important; border-radius: 4px !important; display: inline-block !important;" title="Fresh Direct Lead"><i class="fa-solid fa-sparkles me-1 text-success"></i>Fresh Lead</span>';
+        }
+    }
+}
+
+if (!function_exists('getLeadShuffleAttributionBadgeHtml')) {
+    function getLeadShuffleAttributionBadgeHtml($lead, $sh_info = null): string {
+        $curr_u = function_exists('getUser') ? getUser() : null;
+        $role = $curr_u['role'] ?? ($_SESSION['user']['role'] ?? '');
+        if ($role === 'telecaller') {
+            return '';
+        }
+
+        $from_name = $sh_info['from_caller_name'] ?? ($sh_info['from_tc_name'] ?? ($lead['shuffled_from_name'] ?? ''));
+        $to_name   = $sh_info['to_caller_name'] ?? ($sh_info['to_tc_name'] ?? ($lead['telecaller_name'] ?? ''));
+
+        if (empty($from_name) && empty($sh_info)) {
+            return '';
+        }
+
+        $curr_st = strtoupper(trim((string)($lead['status'] ?? '')));
+        $is_int = (
+            $curr_st === 'INT' || 
+            $curr_st === 'INT_VISIT_DONE' || 
+            strpos($curr_st, 'INT') !== false || 
+            strpos($curr_st, 'INTERESTED') !== false
+        );
+
+        if ($is_int) {
+            $from_text = !empty($from_name) ? "Ex: " . htmlspecialchars($from_name) : "Shuffled";
+            $to_text   = !empty($to_name) ? " → Now: " . htmlspecialchars($to_name) : "";
+            return '<span class="badge" style="background-color: #ecfdf5 !important; color: #047857 !important; border: 1px solid #10b981 !important; font-size: 10px !important; font-weight: 700 !important; padding: 2px 6px !important; border-radius: 4px !important; display: inline-block !important;" title="Recovered INT Lead: Originally from ' . htmlspecialchars($from_name) . '"><i class="fa-solid fa-wand-magic-sparkles me-1 text-success"></i>Recovered INT (' . $from_text . $to_text . ')</span>';
+        } else {
+            $from_text = !empty($from_name) ? "From: " . htmlspecialchars($from_name) : "Shuffled Lead";
+            return '<span class="badge" style="background-color: #f5f3ff !important; color: #6d28d9 !important; border: 1px solid #c4b5fd !important; font-size: 10px !important; font-weight: 600 !important; padding: 2px 6px !important; border-radius: 4px !important; display: inline-block !important;" title="Shuffled lead received for fresh calling"><i class="fa-solid fa-shuffle me-1"></i>Shuffled (' . $from_text . ')</span>';
+        }
+    }
+}
+
+/**
+ * Dropdown master data: Site Locations, Budgets, and OS Locations
+ */
+if (!function_exists('getSiteLocationsList')) {
+    function getSiteLocationsList($pdo = null): array {
+        $defaults = ['DGC-I', 'DGC-II', 'DGC-III', 'SGC', 'NGC', 'DGC-IV', 'Multiple Sites', 'All SITES'];
+        $json_file = __DIR__ . '/site_locations.json';
+        $locations = [];
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $item) {
+                    $name = is_array($item) ? trim((string)($item['name'] ?? '')) : trim((string)$item);
+                    if (!empty($name)) {
+                        $locations[$name] = $name;
+                    }
+                }
+            }
+        }
+        if ($pdo) {
+            try {
+                $db_locs = $pdo->query("SELECT name FROM site_locations ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
+                if (!empty($db_locs)) {
+                    foreach ($db_locs as $loc) {
+                        $loc = trim((string)$loc);
+                        if (!empty($loc)) $locations[$loc] = $loc;
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
+        if (empty($locations)) {
+            foreach ($defaults as $d) $locations[$d] = $d;
+        }
+        return array_values($locations);
+    }
+}
+
+if (!function_exists('addSiteLocation')) {
+    function addSiteLocation(string $name, $pdo = null): array {
+        $name = trim($name);
+        if (empty($name)) {
+            return ['status' => 'error', 'message' => 'Please enter a valid Site Location name.'];
+        }
+
+        // 1. JSON Persistence
+        $json_file = __DIR__ . '/site_locations.json';
+        $locations = [];
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) $locations = $decoded;
+        }
+        $exists = false;
+        foreach ($locations as $l) {
+            if (strcasecmp(trim((string)$l), $name) === 0) {
+                $exists = true;
+                break;
+            }
+        }
+        if (!$exists) {
+            $locations[] = $name;
+            @file_put_contents($json_file, json_encode(array_values($locations), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        }
+
+        // 2. MySQL Persistence
+        if ($pdo) {
+            try {
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `site_locations` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `name` varchar(150) NOT NULL,
+                    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `name` (`name`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;");
+
+                $chk = $pdo->prepare("SELECT id FROM site_locations WHERE LOWER(name) = LOWER(?)");
+                $chk->execute([$name]);
+                if (!$chk->fetch()) {
+                    $ins = $pdo->prepare("INSERT INTO site_locations (name) VALUES (?)");
+                    $ins->execute([$name]);
+                }
+            } catch (Throwable $e) {}
+        }
+
+        return [
+            'status' => 'success',
+            'message' => "Site location '{$name}' added successfully!",
+            'location' => $name,
+            'locations' => getSiteLocationsList($pdo)
+        ];
+    }
+}
+
+if (!function_exists('deleteSiteLocation')) {
+    function deleteSiteLocation(string $name, $pdo = null): array {
+        $name = trim($name);
+        if (empty($name)) {
+            return ['status' => 'error', 'message' => 'Invalid location name.'];
+        }
+
+        $json_file = __DIR__ . '/site_locations.json';
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) {
+                $new_list = [];
+                foreach ($decoded as $l) {
+                    if (strcasecmp(trim((string)$l), $name) !== 0) {
+                        $new_list[] = $l;
+                    }
+                }
+                @file_put_contents($json_file, json_encode(array_values($new_list), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+            }
+        }
+
+        if ($pdo) {
+            try {
+                $del = $pdo->prepare("DELETE FROM site_locations WHERE LOWER(name) = LOWER(?)");
+                $del->execute([$name]);
+            } catch (Throwable $e) {}
+        }
+
+        return [
+            'status' => 'success',
+            'message' => "Site location '{$name}' removed successfully.",
+            'locations' => getSiteLocationsList($pdo)
+        ];
+    }
+}
+
+if (!function_exists('getBudgetsList')) {
+    function getBudgetsList($pdo = null): array {
+        $defaults = [
+            '0 - 10 Lakhs',
+            '10 - 25 Lakhs',
+            '25 - 50 Lakhs',
+            '50 - 75 Lakhs',
+            '75 Lakhs - 1 Cr',
+            '1 Cr+'
+        ];
+        $json_file = __DIR__ . '/budgets.json';
+        $budgets = [];
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $item) {
+                    $name = is_array($item) ? trim((string)($item['name'] ?? '')) : trim((string)$item);
+                    if (!empty($name)) {
+                        $budgets[$name] = $name;
+                    }
+                }
+            }
+        }
+        if ($pdo) {
+            try {
+                $db_b = $pdo->query("SELECT name FROM budgets ORDER BY sort_order ASC, name ASC")->fetchAll(PDO::FETCH_COLUMN);
+                if (!empty($db_b)) {
+                    foreach ($db_b as $b) {
+                        $b = trim((string)$b);
+                        if (!empty($b)) $budgets[$b] = $b;
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
+        if (empty($budgets)) {
+            foreach ($defaults as $d) $budgets[$d] = $d;
+        }
+        return array_values($budgets);
+    }
+}
+
+if (!function_exists('addBudget')) {
+    function addBudget(string $name, $pdo = null): array {
+        $name = trim($name);
+        if (empty($name)) {
+            return ['status' => 'error', 'message' => 'Please enter a valid Budget range.'];
+        }
+
+        $json_file = __DIR__ . '/budgets.json';
+        $budgets = [];
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) $budgets = $decoded;
+        }
+        $exists = false;
+        foreach ($budgets as $b) {
+            if (strcasecmp(trim((string)$b), $name) === 0) {
+                $exists = true;
+                break;
+            }
+        }
+        if (!$exists) {
+            $budgets[] = $name;
+            @file_put_contents($json_file, json_encode(array_values($budgets), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        }
+
+        if ($pdo) {
+            try {
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `budgets` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `name` varchar(100) NOT NULL,
+                    `sort_order` int(11) NOT NULL DEFAULT 0,
+                    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `name` (`name`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;");
+
+                $chk = $pdo->prepare("SELECT id FROM budgets WHERE LOWER(name) = LOWER(?)");
+                $chk->execute([$name]);
+                if (!$chk->fetch()) {
+                    $ins = $pdo->prepare("INSERT INTO budgets (name) VALUES (?)");
+                    $ins->execute([$name]);
+                }
+            } catch (Throwable $e) {}
+        }
+
+        return [
+            'status' => 'success',
+            'message' => "Budget range '{$name}' added successfully!",
+            'budget' => $name,
+            'budgets' => getBudgetsList($pdo)
+        ];
+    }
+}
+
+if (!function_exists('deleteBudget')) {
+    function deleteBudget(string $name, $pdo = null): array {
+        $name = trim($name);
+        if (empty($name)) {
+            return ['status' => 'error', 'message' => 'Invalid budget name.'];
+        }
+
+        $json_file = __DIR__ . '/budgets.json';
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) {
+                $new_list = [];
+                foreach ($decoded as $b) {
+                    if (strcasecmp(trim((string)$b), $name) !== 0) {
+                        $new_list[] = $b;
+                    }
+                }
+                @file_put_contents($json_file, json_encode(array_values($new_list), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+            }
+        }
+
+        if ($pdo) {
+            try {
+                $del = $pdo->prepare("DELETE FROM budgets WHERE LOWER(name) = LOWER(?)");
+                $del->execute([$name]);
+            } catch (Throwable $e) {}
+        }
+
+        return [
+            'status' => 'success',
+            'message' => "Budget range '{$name}' removed successfully.",
+            'budgets' => getBudgetsList($pdo)
+        ];
+    }
+}
+
+if (!function_exists('getOsLocationsList')) {
+    function getOsLocationsList($pdo = null): array {
+        $defaults = ['Noida', 'Greater Noida', 'Gurgaon', 'Faridabad', 'Delhi', 'Ghaziabad', 'Other City'];
+        $json_file = __DIR__ . '/os_locations.json';
+        $locations = [];
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $item) {
+                    $name = is_array($item) ? trim((string)($item['name'] ?? '')) : trim((string)$item);
+                    if (!empty($name)) {
+                        $locations[$name] = $name;
+                    }
+                }
+            }
+        }
+        if ($pdo) {
+            try {
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `os_locations` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `name` varchar(150) NOT NULL,
+                    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `name` (`name`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;");
+
+                $db_os = $pdo->query("SELECT name FROM os_locations ORDER BY name ASC")->fetchAll(PDO::FETCH_COLUMN);
+                if (!empty($db_os)) {
+                    foreach ($db_os as $loc) {
+                        $loc = trim((string)$loc);
+                        if (!empty($loc)) $locations[$loc] = $loc;
+                    }
+                }
+            } catch (Throwable $e) {}
+        }
+        if (empty($locations)) {
+            foreach ($defaults as $d) $locations[$d] = $d;
+        }
+        return array_values($locations);
+    }
+}
+
+if (!function_exists('addOsLocation')) {
+    function addOsLocation(string $name, $pdo = null): array {
+        $name = trim($name);
+        if (empty($name)) {
+            return ['status' => 'error', 'message' => 'Please enter a valid OS location name.'];
+        }
+
+        $json_file = __DIR__ . '/os_locations.json';
+        $locations = [];
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) $locations = $decoded;
+        }
+        $exists = false;
+        foreach ($locations as $l) {
+            if (strcasecmp(trim((string)$l), $name) === 0) {
+                $exists = true;
+                break;
+            }
+        }
+        if (!$exists) {
+            $locations[] = $name;
+            @file_put_contents($json_file, json_encode(array_values($locations), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        }
+
+        if ($pdo) {
+            try {
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `os_locations` (
+                    `id` int(11) NOT NULL AUTO_INCREMENT,
+                    `name` varchar(150) NOT NULL,
+                    `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (`id`),
+                    UNIQUE KEY `name` (`name`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;");
+
+                $chk = $pdo->prepare("SELECT id FROM os_locations WHERE LOWER(name) = LOWER(?)");
+                $chk->execute([$name]);
+                if (!$chk->fetch()) {
+                    $ins = $pdo->prepare("INSERT INTO os_locations (name) VALUES (?)");
+                    $ins->execute([$name]);
+                }
+            } catch (Throwable $e) {}
+        }
+
+        return [
+            'status' => 'success',
+            'message' => "OS Location '{$name}' added successfully!",
+            'location' => $name,
+            'locations' => getOsLocationsList($pdo)
+        ];
+    }
+}
+
+if (!function_exists('deleteOsLocation')) {
+    function deleteOsLocation(string $name, $pdo = null): array {
+        $name = trim($name);
+        if (empty($name)) {
+            return ['status' => 'error', 'message' => 'Invalid location name.'];
+        }
+
+        $json_file = __DIR__ . '/os_locations.json';
+        if (file_exists($json_file)) {
+            $decoded = @json_decode(file_get_contents($json_file), true);
+            if (is_array($decoded)) {
+                $new_list = [];
+                foreach ($decoded as $l) {
+                    if (strcasecmp(trim((string)$l), $name) !== 0) {
+                        $new_list[] = $l;
+                    }
+                }
+                @file_put_contents($json_file, json_encode(array_values($new_list), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+            }
+        }
+
+        if ($pdo) {
+            try {
+                $del = $pdo->prepare("DELETE FROM os_locations WHERE LOWER(name) = LOWER(?)");
+                $del->execute([$name]);
+            } catch (Throwable $e) {}
+        }
+
+        return [
+            'status' => 'success',
+            'message' => "OS Location '{$name}' removed successfully.",
+            'locations' => getOsLocationsList($pdo)
+        ];
+    }
+}
+
+/**
+ * Ensures lead columns and secondary master tables exist in MySQL
+ */
+if (!function_exists('ensureLeadColumnsSchema')) {
+    function ensureLeadColumnsSchema($pdo, bool $force = false): void {
+        static $checked = false;
+        if (($checked && !$force) || !$pdo) {
+            return;
+        }
+
+        try {
+            // Ensure os_locations master table exists
+            try {
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `os_locations` (
+                    `id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `name` VARCHAR(150) NOT NULL UNIQUE,
+                    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            } catch (Throwable $e_os_tbl) {}
+
+            $cols = $pdo->query("SHOW COLUMNS FROM `leads`")->fetchAll(PDO::FETCH_COLUMN);
+            if (empty($cols)) {
+                return;
+            }
+
+            $needed_columns = [
+                'os_sub_reason'               => "VARCHAR(255) NULL DEFAULT NULL AFTER `status`",
+                'budget'                      => "VARCHAR(100) NULL DEFAULT NULL AFTER `site_location`",
+                'upcoming_follow_up'          => "DATETIME NULL DEFAULT NULL AFTER `remark_1`",
+                'followup_date'               => "DATETIME NULL DEFAULT NULL",
+                'followup_1'                  => "DATETIME NULL DEFAULT NULL",
+                'followup_2'                  => "DATETIME NULL DEFAULT NULL",
+                'lead_type'                   => "VARCHAR(20) NULL DEFAULT NULL AFTER `meta_campaign_name`",
+                'sales_manager_id'            => "INT(11) NULL DEFAULT NULL AFTER `lead_type`",
+                'salesperson_id'              => "INT(11) NULL DEFAULT NULL",
+                'manager_name'                => "VARCHAR(150) NULL DEFAULT NULL AFTER `salesperson_id`",
+                'visit_done_by'               => "VARCHAR(150) NULL DEFAULT NULL AFTER `manager_name`",
+                'team_head'                   => "VARCHAR(150) NULL DEFAULT NULL AFTER `visit_done_by`",
+                'sales_manager_assigned_at'   => "DATETIME NULL DEFAULT NULL AFTER `team_head`",
+                'sales_executive_assigned_at' => "DATETIME NULL DEFAULT NULL AFTER `sales_manager_assigned_at`",
+                'happy_calling_date'          => "DATE NULL DEFAULT NULL AFTER `sales_executive_assigned_at`",
+                'happy_calling_status'        => "VARCHAR(100) NULL DEFAULT NULL AFTER `happy_calling_date`",
+                'happy_calling_remark'        => "TEXT NULL DEFAULT NULL AFTER `happy_calling_status`",
+                'final_status_manager'        => "VARCHAR(100) NULL DEFAULT NULL AFTER `happy_calling_remark`",
+                'final_status_date_manager'   => "DATE NULL DEFAULT NULL AFTER `final_status_manager`"
+            ];
+
+            foreach ($needed_columns as $col_name => $col_def) {
+                if (!in_array($col_name, $cols, true)) {
+                    try {
+                        $pdo->exec("ALTER TABLE `leads` ADD COLUMN `{$col_name}` {$col_def}");
+                    } catch (Throwable $alter_err) {
+                        try {
+                            $def_clean = preg_replace('/\s+AFTER\s+`[^`]+`/i', '', $col_def);
+                            $pdo->exec("ALTER TABLE `leads` ADD COLUMN `{$col_name}` {$def_clean}");
+                        } catch (Throwable $e2) {}
+                    }
+                }
+            }
+
+            // Also ensure users table columns exist
+            try {
+                $u_cols = $pdo->query("SHOW COLUMNS FROM `users`")->fetchAll(PDO::FETCH_COLUMN);
+                $user_needed = [
+                    'manager_id'        => "INT(11) NULL DEFAULT NULL AFTER `role`",
+                    'branch_name'       => "VARCHAR(100) NULL DEFAULT NULL",
+                    'designation'       => "VARCHAR(100) NULL DEFAULT NULL",
+                    'is_present'        => "TINYINT(1) DEFAULT 1",
+                    'system_ip'         => "VARCHAR(45) NULL DEFAULT NULL"
+                ];
+                foreach ($user_needed as $uc => $ud) {
+                    if (!in_array($uc, $u_cols, true)) {
+                        try {
+                            $pdo->exec("ALTER TABLE `users` ADD COLUMN `{$uc}` {$ud}");
+                        } catch (Throwable $ue) {}
+                    }
+                }
+            } catch (Throwable $ue_tbl) {}
+
+            $checked = true;
+        } catch (Throwable $e) {}
+    }
+}
+
+if (!function_exists('ensureBudgetSchema')) {
+    function ensureBudgetSchema($pdo): void {
+        static $checked = false;
+        if ($checked || !$pdo) return;
+        try {
+            ensureLeadColumnsSchema($pdo);
+            $pdo->exec("CREATE TABLE IF NOT EXISTS `budgets` (
+                `id` INT AUTO_INCREMENT PRIMARY KEY,
+                `name` VARCHAR(100) NOT NULL UNIQUE,
+                `sort_order` INT NOT NULL DEFAULT 0,
+                `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+            $checked = true;
+        } catch (Throwable $e) {}
+    }
+}
+
+/**
+ * 30-day unclosed INT leads auto-shuffle
+ */
+if (!function_exists('autoShuffle15DayExpiredIntLeads')) {
+    function autoShuffle15DayExpiredIntLeads($pdo): int {
+        if (!$pdo) return 0;
+        try {
+            $candidates_stmt = $pdo->query("
+                SELECT l.id, l.name, l.phone, l.status, l.telecaller_id, l.created_at,
+                       l.remark_1, l.remark_2, l.remark_3, u.name as telecaller_name
+                FROM leads l
+                LEFT JOIN users u ON l.telecaller_id = u.id
+                WHERE (l.status IN ('INT', 'Interested') OR (l.status LIKE '%INT%' AND l.status NOT LIKE '%VISIT%'))
+                  AND NOT (
+                      l.status IN ('INT_VISIT_DONE', 'Converted', 'Booked', 'Booked / Token Paid', 'Site Visit Scheduled', 'Site Visit Done', 'Re-Visit Scheduled')
+                      OR LOWER(COALESCE(l.visit_status, '')) LIKE '%yes%'
+                      OR LOWER(COALESCE(l.visit_status, '')) LIKE '%visit%'
+                      OR LOWER(COALESCE(l.visit_done, '')) = 'yes'
+                      OR l.site_visit_at IS NOT NULL
+                      OR l.visit_date IS NOT NULL
+                  )
+                  AND DATE(l.created_at) < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                  AND l.telecaller_id IS NOT NULL AND l.telecaller_id > 0
+                  AND NOT (
+                      LOWER(COALESCE(u.designation, '')) LIKE '%senior%' 
+                      OR LOWER(COALESCE(u.designation, '')) LIKE '%sr.%'
+                      OR LOWER(COALESCE(u.name, '')) LIKE 'rakesh%'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM shuffled_leads_history slh 
+                      WHERE slh.lead_id = l.id 
+                        AND slh.shuffled_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                  )
+                ORDER BY l.id ASC
+            ");
+            $candidates = $candidates_stmt->fetchAll(PDO::FETCH_ASSOC);
+            if (empty($candidates)) return 0;
+
+            $tc_stmt = $pdo->query("
+                SELECT id, name, designation FROM users 
+                WHERE role = 'telecaller' 
+                  AND (is_active IS NULL OR is_active = 1)
+                  AND (is_present = 1 OR is_present IS NULL)
+                ORDER BY id ASC
+            ");
+            $all_tcs = $tc_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Exclude senior telecallers
+            $telecallers = [];
+            foreach ($all_tcs as $tc) {
+                $d = strtolower($tc['designation'] ?? '');
+                $n = strtolower($tc['name'] ?? '');
+                if (strpos($d, 'senior') === false && strpos($d, 'sr.') === false && strpos($n, 'rakesh') === false) {
+                    $telecallers[] = $tc;
+                }
+            }
+            if (count($telecallers) < 2) return 0;
+
+            $shuffled_count = 0;
+            $admin_id = $_SESSION['user_id'] ?? 1;
+
+            $update_lead = $pdo->prepare("
+                UPDATE leads 
+                SET telecaller_id = ?,
+                    status = 'NEW',
+                    remark_1 = '',
+                    upcoming_follow_up = NULL,
+                    followup_date = NULL,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+
+            $log_history = $pdo->prepare("
+                INSERT INTO shuffled_leads_history 
+                (lead_id, from_telecaller_id, to_telecaller_id, previous_status, previous_remarks, shuffled_by, shuffled_at)
+                VALUES (?, ?, ?, ?, ?, ?, NOW())
+            ");
+
+            foreach ($candidates as $idx => $lead) {
+                $from_id = (int)$lead['telecaller_id'];
+                $available = array_values(array_filter($telecallers, function($t) use ($from_id) {
+                    return (int)$t['id'] !== $from_id;
+                }));
+                if (empty($available)) continue;
+
+                $target_tc = $available[$idx % count($available)];
+                $to_id = (int)$target_tc['id'];
+
+                $update_lead->execute([$to_id, $lead['id']]);
+                try {
+                    $log_history->execute([
+                        $lead['id'],
+                        $from_id,
+                        $to_id,
+                        $lead['status'] ?? 'INT',
+                        $lead['remark_1'] ?? '',
+                        $admin_id
+                    ]);
+                } catch (Throwable $eh) {}
+
+                $shuffled_count++;
+            }
+            return $shuffled_count;
+        } catch (Throwable $e) {
+            return 0;
+        }
+    }
+}
+
+if (!function_exists('autoShuffle30DayExpiredIntLeads')) {
+    function autoShuffle30DayExpiredIntLeads($pdo): int {
+        return autoShuffle15DayExpiredIntLeads($pdo);
+    }
+}
+
+/**
+ * Sales unassign & delegate helpers
+ */
+if (!function_exists('unassignLeadFromSales')) {
+    function unassignLeadFromSales($pdo, $lead_id, $user_id = null, $reason = ''): array {
+        if (!$pdo || !$lead_id) {
+            return ['status' => 'error', 'message' => 'Invalid lead.'];
+        }
+        try {
+            $stmt = $pdo->prepare("
+                UPDATE leads 
+                SET salesperson_id = NULL, 
+                    sales_manager_id = NULL, 
+                    sales_assigned_at = NULL, 
+                    sales_manager_assigned_at = NULL, 
+                    sales_executive_assigned_at = NULL,
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$lead_id]);
+
+            if (function_exists('logUserActivity')) {
+                $actor = $user_id ?: ($_SESSION['user_id'] ?? 1);
+                logUserActivity($pdo, $actor, 'lead_unassigned_sales', "Lead #$lead_id unassigned from sales. Reason: $reason");
+            }
+            return ['status' => 'success', 'message' => 'Lead successfully unassigned from sales.'];
+        } catch (Throwable $e) {
+            return ['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()];
+        }
+    }
+}
+
+if (!function_exists('delegateLeadToSalesExecutive')) {
+    function delegateLeadToSalesExecutive($pdo, $lead_id, $executive_id, $user_id = null, $manager_note = ''): array {
+        if (!$pdo || !$lead_id || !$executive_id) {
+            return ['status' => 'error', 'message' => 'Invalid parameters for delegation.'];
+        }
+        try {
+            $stmt_exec = $pdo->prepare("SELECT id, name FROM users WHERE id = ?");
+            $stmt_exec->execute([$executive_id]);
+            $exec = $stmt_exec->fetch(PDO::FETCH_ASSOC);
+            if (!$exec) {
+                return ['status' => 'error', 'message' => 'Executive not found.'];
+            }
+            $stmt = $pdo->prepare("
+                UPDATE leads 
+                SET salesperson_id = ?, 
+                    sales_executive_assigned_at = NOW(), 
+                    sales_assigned_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$executive_id, $lead_id]);
+
+            if (function_exists('logUserActivity')) {
+                $actor = $user_id ?: ($_SESSION['user_id'] ?? 1);
+                logUserActivity($pdo, $actor, 'lead_delegated', "Lead #$lead_id delegated to {$exec['name']}. Note: $manager_note");
+            }
+            return ['status' => 'success', 'message' => "Lead successfully delegated to {$exec['name']}."];
+        } catch (Throwable $e) {
+            return ['status' => 'error', 'message' => 'Database error: ' . $e->getMessage()];
+        }
+    }
+}
+
+/**
+ * Remark and Status Deductions
+ */
+if (!function_exists('deduceStatusFromRemarkText')) {
+    function deduceStatusFromRemarkText($remark): string {
+        $remark = strtolower(trim((string)$remark));
+        if (empty($remark)) return 'NEW';
+        if (strpos($remark, 'visit done') !== false || strpos($remark, 'token') !== false || strpos($remark, 'booked') !== false) return 'INT_VISIT_DONE';
+        if (strpos($remark, 'int') !== false || strpos($remark, 'interested') !== false || strpos($remark, 'visit') !== false) return 'INT';
+        if (strpos($remark, 'not int') !== false || strpos($remark, 'ni') !== false || strpos($remark, 'dnd') !== false) return 'NI';
+        if (strpos($remark, 'other site') !== false || strpos($remark, 'os') !== false) return 'OS';
+        if (strpos($remark, 'busy') !== false) return 'OTH_BUSY';
+        if (strpos($remark, 'switch') !== false) return 'OTH_SWITCH_OFF';
+        if (strpos($remark, 'not pick') !== false || strpos($remark, 'rnr') !== false) return 'OTH_NOT_PICK';
+        if (strpos($remark, 'call back') !== false || strpos($remark, 'callback') !== false) return 'OTH_CALL_BACK';
+        if (strpos($remark, 'invalid') !== false || strpos($remark, 'wrong') !== false) return 'OTH_INVALID_NUMBER';
+        if (strpos($remark, 'network') !== false) return 'OTH_NETWORK_ISSUE';
+        return 'OTH';
+    }
+}
+
+if (!function_exists('deduceLeadStatusSmart')) {
+    function deduceLeadStatusSmart($lead): string {
+        if (!is_array($lead)) return 'NEW';
+        $st = trim((string)($lead['status'] ?? ''));
+        if (!empty($st)) return normalizeLeadStatus($st);
+        $rem = trim((string)($lead['remark_1'] ?? ''));
+        return deduceStatusFromRemarkText($rem);
+    }
+}
+
+if (!function_exists('deduceRealLeadStatus')) {
+    function deduceRealLeadStatus($lead): string {
+        return deduceLeadStatusSmart($lead);
+    }
+}
+
+if (!function_exists('getStatusBadgeHtml')) {
+    function getStatusBadgeHtml($status): string {
+        $norm = normalizeLeadStatus($status);
+        $color = function_exists('getLeadStatusColor') ? getLeadStatusColor($norm) : '#0284c7';
+        $strict = getStrictLeadStatuses();
+        $label = $strict[$norm]['label'] ?? $norm;
+        return '<span class="badge" style="background-color: ' . htmlspecialchars($color) . '; color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 4px;">' . htmlspecialchars($label) . '</span>';
+    }
+}
+
+/**
+ * Ensure mailer notification helper is defined
+ */
+if (!function_exists('sendNewLeadNotification')) {
+    function sendNewLeadNotification($pdo, $lead_id, $user_id) {
+        $mailer_path = __DIR__ . '/mailer.php';
+        if (file_exists($mailer_path)) {
+            require_once $mailer_path;
+            if (function_exists('sendNewLeadNotification')) {
+                return sendNewLeadNotification($pdo, $lead_id, $user_id);
+            }
+        }
+        return false;
+    }
+}
+
+/**
+ * Synchronize and backfill missing shuffle records from lead_notes into shuffled_leads_history
+ */
+if (!function_exists('syncShuffledLeadsFromNotesToHistory')) {
+    function syncShuffledLeadsFromNotesToHistory(PDO $pdo): int {
+        try {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS `shuffled_leads_history` (
+                  `id` int(11) NOT NULL AUTO_INCREMENT,
+                  `lead_id` int(11) NOT NULL,
+                  `from_telecaller_id` int(11) DEFAULT NULL,
+                  `to_telecaller_id` int(11) DEFAULT NULL,
+                  `shuffled_by` int(11) DEFAULT NULL,
+                  `previous_status` varchar(100) DEFAULT NULL,
+                  `previous_remarks` text DEFAULT NULL,
+                  `previous_call_at` datetime DEFAULT NULL,
+                  `new_status` varchar(100) DEFAULT 'New',
+                  `new_remarks` text DEFAULT NULL,
+                  `new_call_at` datetime DEFAULT NULL,
+                  `shuffled_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  PRIMARY KEY (`id`),
+                  KEY `lead_id` (`lead_id`),
+                  KEY `from_telecaller_id` (`from_telecaller_id`),
+                  KEY `to_telecaller_id` (`to_telecaller_id`),
+                  KEY `shuffled_at` (`shuffled_at`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+            ");
+
+            $count_history = (int)$pdo->query("SELECT COUNT(*) FROM shuffled_leads_history")->fetchColumn();
+            $count_notes   = (int)$pdo->query("SELECT COUNT(*) FROM lead_notes WHERE note LIKE '%LEAD SHUFFLED:%' OR note LIKE '%Reassigned from ['")->fetchColumn();
+
+            if ($count_notes <= $count_history) {
+                return 0;
+            }
+
+            $u_stmt = $pdo->query("SELECT id, name FROM users");
+            $user_map = [];
+            while ($u = $u_stmt->fetch(PDO::FETCH_ASSOC)) {
+                $user_map[strtolower(trim($u['name']))] = (int)$u['id'];
+            }
+
+            $existing_keys = [];
+            $e_stmt = $pdo->query("SELECT lead_id, DATE(shuffled_at) as s_dt FROM shuffled_leads_history");
+            while ($er = $e_stmt->fetch(PDO::FETCH_ASSOC)) {
+                $existing_keys[$er['lead_id'] . '_' . $er['s_dt']] = true;
+            }
+
+            $sn_stmt = $pdo->query("
+                SELECT ln.id, ln.lead_id, ln.user_id, ln.note, ln.created_at, DATE(ln.created_at) as n_dt
+                FROM lead_notes ln
+                WHERE ln.note LIKE '%LEAD SHUFFLED:%' OR ln.note LIKE '%Reassigned from ['
+                ORDER BY ln.id ASC
+            ");
+
+            $insert_hist = $pdo->prepare("
+                INSERT INTO shuffled_leads_history 
+                (lead_id, from_telecaller_id, to_telecaller_id, shuffled_by, previous_status, previous_remarks, new_status, shuffled_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'New', ?)
+            ");
+
+            $batch_inserts = 0;
+            while ($sn = $sn_stmt->fetch(PDO::FETCH_ASSOC)) {
+                $key = $sn['lead_id'] . '_' . $sn['n_dt'];
+                if (isset($existing_keys[$key])) {
+                    continue;
+                }
+
+                $note = $sn['note'];
+                $from_name = null;
+                $to_name = null;
+                $prev_status = 'New';
+                $prev_remarks = null;
+
+                if (preg_match('/Reassigned from \[([^\]]+)\] to \[([^\]]+)\]/i', $note, $m)) {
+                    $from_name = trim($m[1]);
+                    $to_name = trim($m[2]);
+                }
+
+                if (preg_match('/Previous Status:\s*([A-Za-z0-9_\-\/\s]+?)(?:\s*\||\s*→|\s*\))/i', $note, $m)) {
+                    $prev_status = trim($m[1]);
+                } elseif (preg_match('/\(Status:\s*([A-Za-z0-9_\-\/\s]+?)\)/i', $note, $m)) {
+                    $prev_status = trim($m[1]);
+                }
+
+                if (preg_match('/Previous Notes by \[[^\]]+\]:\s*\(([^)]+)\)/i', $note, $m)) {
+                    $prev_remarks = trim($m[1]);
+                }
+
+                $from_id = null;
+                if (!empty($from_name) && strtolower($from_name) !== 'unassigned') {
+                    $from_id = $user_map[strtolower($from_name)] ?? null;
+                }
+
+                $to_id = null;
+                if (!empty($to_name)) {
+                    $to_id = $user_map[strtolower($to_name)] ?? null;
+                }
+
+                try {
+                    $insert_hist->execute([
+                        (int)$sn['lead_id'],
+                        $from_id,
+                        $to_id,
+                        (int)($sn['user_id'] ?: 1),
+                        $prev_status,
+                        $prev_remarks,
+                        $sn['created_at']
+                    ]);
+                    $existing_keys[$key] = true;
+                    $batch_inserts++;
+                } catch (Throwable $e_ins) {}
+            }
+            return $batch_inserts;
+        } catch (Throwable $e) {
+            return 0;
+        }
+    }
+}

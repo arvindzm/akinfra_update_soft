@@ -12,11 +12,11 @@ $(document).ready(function () {
         var drEl = $('#tc-dead-reason-' + leadId);
 
         var isSales = (status === 'Assigned to Sales');
-        var isFollowUp = (status === 'Follow Up' || status === 'Site Visit Done');
+        var isFollowUp = (status === 'Follow Up');
         var isSiteVisit = (status === 'Site Visit Scheduled' || status === 'Site Visit Done');
         var isSVSched = (status === 'Site Visit Scheduled');
         var isSVDone = (status === 'Site Visit Done');
-        var isNego = (status === 'Negotiation' || status === 'Converted' || status === 'Site Visit Done');
+        var isNego = (status === 'Negotiation' || status === 'Converted');
         var isConverted = (status === 'Converted');
         var isDead = (status === 'Dead');
 
@@ -89,29 +89,39 @@ $(document).ready(function () {
 
     // Status Color Map
     var leadStatusColorMap = {
+        'NEW': '#0284c7',
         'INT': '#16a34a',
-        'Interested': '#16a34a',
         'NI': '#dc2626',
+        'OS': '#475569',
+        'OTH': '#6b7280',
+        'OTH_NOT_PICK': '#7c3aed',
+        'OTH_BUSY': '#4f46e5',
+        'OTH_SWITCH_OFF': '#64748b',
+        'OTH_NETWORK_ISSUE': '#0d9488',
+        'OTH_CALL_BACK': '#ea580c',
+        'OTH_INCOMING_OFF': '#78716c',
+        'OTH_CALL_DISCONNECTED': '#e11d48',
+        'OTH_INVALID_NUMBER': '#9f1239',
+        'OTH_OUT_OF_SERVICE': '#334155',
+        'OTH_CALL_FORWARDED': '#0891b2',
+        'INT_VISIT_DONE': '#059669',
+        'NI_FO': '#b45309',
+        // Legacy fallbacks
+        'Interested': '#16a34a',
         'Not Interested': '#dc2626',
         'New': '#0284c7',
         'In Progress': '#0891b2',
         'Follow Up': '#d97706',
         'OTH Call Back': '#ea580c',
-        'OTH_CALL_BACK': '#ea580c',
         'Call Disconnect': '#e11d48',
         'Call Disconnected': '#e11d48',
-        'OTH_BUSY': '#4f46e5',
         'Busy / Callback': '#4f46e5',
-        'OTH_NOT_PICK': '#7c3aed',
         'RNR (No Response)': '#7c3aed',
-        'OTH_SWITCH_OFF': '#64748b',
         'Switched Off': '#64748b',
         'Incoming Off': '#78716c',
         'Call Forwarding': '#0891b2',
-        'OS': '#475569',
-        'Out of Service': '#475569',
+        'Out of Service': '#334155',
         'OTH_NETWORK': '#0d9488',
-        'OTH': '#6b7280',
         'Invalid Number': '#9f1239',
         'Wrong Number': '#9f1239',
         'Site Visit Scheduled': '#9333ea',
@@ -129,10 +139,17 @@ $(document).ready(function () {
 
     // Update Dropdown Data Attribute & Color
     function updateDropdownColor(selectEl, newStatus) {
-        if (!newStatus) newStatus = selectEl.val();
+        if (newStatus === undefined) newStatus = selectEl.val();
         selectEl.attr('data-current-status', newStatus);
         selectEl.data('current-status', newStatus);
         if (selectEl.length && selectEl[0]) {
+            if (!newStatus || newStatus === '') {
+                selectEl[0].style.setProperty('background-color', '#f8fafc', 'important');
+                selectEl[0].style.setProperty('border-color', '#cbd5e1', 'important');
+                selectEl[0].style.setProperty('color', '#64748b', 'important');
+                selectEl[0].style.setProperty('font-weight', '600', 'important');
+                return;
+            }
             var color = leadStatusColorMap[newStatus] || '#0284c7';
             selectEl[0].style.setProperty('background-color', color, 'important');
             selectEl[0].style.setProperty('border-color', color, 'important');
@@ -143,8 +160,8 @@ $(document).ready(function () {
 
     // Initialize all table-inline-status on page load
     $('.table-inline-status').each(function () {
-        var s = $(this).val() || $(this).attr('data-current-status');
-        if (s) updateDropdownColor($(this), s);
+        var s = $(this).val() || $(this).attr('data-current-status') || '';
+        updateDropdownColor($(this), s);
     });
 
     // Quick Date Dropdown Auto-Populate Date Range Inputs
@@ -202,6 +219,20 @@ $(document).ready(function () {
         var prevStatus = selectEl.attr('data-current-status') || selectEl.data('current-status') || '';
         var leadId = selectEl.data('lead-id');
 
+        // Check if user selected OS
+        if (newStatus === 'OS') {
+            if (typeof window.openOsDirectoryModal === 'function') {
+                var row = selectEl.closest('tr');
+                var currentVal = row.find('.os-subreason-badge span span').text().trim() || row.find('select[data-field="site_location"]').val() || '';
+                window.openOsDirectoryModal(leadId, selectEl, currentVal, prevStatus);
+                return;
+            }
+        } else {
+            // Remove OS sub-reason badge if switching away from OS
+            var row = selectEl.closest('tr');
+            row.find('.os-subreason-badge').remove();
+        }
+
         selectEl.prop('disabled', true);
         $.post('api/update_lead_status.php', { lead_id: leadId, status: newStatus }, function (res) {
             selectEl.prop('disabled', false);
@@ -221,17 +252,30 @@ $(document).ready(function () {
                     }
                 }
 
+                // If switched to INT_VISIT_DONE, Site Visit Done or Converted, dynamically convert validity timer to Permanent
+                if (['INT_VISIT_DONE', 'Site Visit Done', 'Converted', 'Booked', 'Booked / Token Paid'].indexOf(newStatus) !== -1) {
+                    row.find('.badge').each(function () {
+                        var bText = $(this).text();
+                        if (bText.indexOf('Days Left') !== -1 || bText.indexOf('Expired') !== -1) {
+                            $(this).attr('style', 'background-color:#ecfdf5 !important; color:#047857 !important; border:1px solid #10b981 !important; font-size:10px !important; font-weight:700 !important; padding:2px 6px !important; border-radius:4px !important; display:inline-block !important;')
+                                   .attr('title', 'Site Visit Completed - Permanent Lead')
+                                   .html('<i class="fa-solid fa-shield-halved me-1"></i>Permanent');
+                        }
+                    });
+                }
+
                 showCrmToast(res.message || 'Status updated to [' + newStatus + ']!', 'success');
             } else {
                 selectEl.val(prevStatus);
                 updateDropdownColor(selectEl, prevStatus);
                 showCrmToast((res && res.message) ? res.message : 'Error updating status', 'error');
             }
-        }).fail(function () {
+        }).fail(function (xhr) {
             selectEl.prop('disabled', false);
             selectEl.val(prevStatus);
             updateDropdownColor(selectEl, prevStatus);
-            showCrmToast('Failed to update status. Please try again.', 'error');
+            var errMsg = (xhr && xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : 'Failed to update status. Please try again.';
+            showCrmToast(errMsg, 'error');
         });
     });
 
@@ -285,6 +329,7 @@ $(document).ready(function () {
         var initialVal = cellEl.data('initial-val');
 
         if (!leadId || !field) return;
+        if (val === '__add_new_location__' || val === '__add_new_budget__') return; // Do not save action placeholder
         if (typeof initialVal !== 'undefined' && initialVal === val) {
             return; // No change
         }
@@ -304,12 +349,45 @@ $(document).ready(function () {
                 tdCell.addClass('cell-saved-glow');
                 setTimeout(function () { tdCell.removeClass('cell-saved-glow'); }, 1200);
                 showCrmToast(res.message || 'Saved successfully!', 'success');
+
+                // If a follow-up date was updated, immediately update the Scheduled Time column & other inputs in that row
+                if (['upcoming_follow_up', 'followup_1', 'followup_2', 'followup_date'].indexOf(field) !== -1) {
+                    var row = cellEl.closest('tr');
+                    var timeEl = row.find('.scheduled-time-display');
+                    if (timeEl.length && val) {
+                        var d = new Date(val);
+                        if (!isNaN(d.getTime())) {
+                            var formattedTime = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' +
+                                                d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+                            timeEl.html('<i class="fa-regular fa-clock me-1"></i>' + formattedTime);
+                        }
+                    }
+                    var otherInputs = row.find('input[data-field="' + field + '"]').not(cellEl);
+                    if (otherInputs.length) {
+                        otherInputs.val(val);
+                        otherInputs.data('initial-val', val);
+                    }
+                }
+
+                // If status was changed inline to INT_VISIT_DONE, Site Visit Done or Converted
+                if (field === 'status' && ['INT_VISIT_DONE', 'Site Visit Done', 'Converted', 'Booked', 'Booked / Token Paid'].indexOf(val) !== -1) {
+                    var r = cellEl.closest('tr');
+                    r.find('.badge').each(function () {
+                        var bText = $(this).text();
+                        if (bText.indexOf('Days Left') !== -1 || bText.indexOf('Expired') !== -1) {
+                            $(this).attr('style', 'background-color:#ecfdf5 !important; color:#047857 !important; border:1px solid #10b981 !important; font-size:10px !important; font-weight:700 !important; padding:2px 6px !important; border-radius:4px !important; display:inline-block !important;')
+                                   .attr('title', 'Site Visit Completed - Permanent Lead')
+                                   .html('<i class="fa-solid fa-shield-halved me-1"></i>Permanent');
+                        }
+                    });
+                }
             } else {
                 showCrmToast((res && res.message) ? res.message : 'Error saving changes', 'error');
             }
-        }).fail(function () {
+        }).fail(function (xhr) {
             tdCell.removeClass('cell-saving-glow');
-            showCrmToast('Failed to save cell update.', 'error');
+            var errMsg = (xhr && xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : 'Failed to save cell update.';
+            showCrmToast(errMsg, 'error');
         });
     }
 
@@ -320,11 +398,24 @@ $(document).ready(function () {
 
     // Bind change for selects and date inputs
     $(document).on('change', '.excel-cell-select, .excel-cell-date', function () {
-        saveExcelCell($(this));
+        var cellEl = $(this);
+        if (cellEl.val() === '__add_new_location__') {
+            if (typeof openSiteLocationModal === 'function') {
+                openSiteLocationModal(cellEl);
+            }
+            return;
+        }
+        if (cellEl.val() === '__add_new_budget__') {
+            if (typeof openBudgetModal === 'function') {
+                openBudgetModal(cellEl);
+            }
+            return;
+        }
+        saveExcelCell(cellEl);
     });
 
-    // Bind blur and Enter key for text inputs
-    $(document).on('blur', '.excel-cell-input', function () {
+    // Bind blur and Enter key for text and date inputs
+    $(document).on('blur', '.excel-cell-input, .excel-cell-date', function () {
         saveExcelCell($(this));
     });
 
@@ -505,100 +596,84 @@ $(document).ready(function () {
             reasonGroup.find('select').attr('required', true);
         }
     });
-
-    // Robust Sidebar Toggle Handler for Mobile & Desktop (jQuery fallback)
-    $(document).on('click touchstart', '#sidebarToggle, #sidebarToggle *', function (e) {
-        if (e.type === 'touchstart') {
-            $(this).data('touched', true);
-        } else if (e.type === 'click' && $(this).data('touched')) {
-            $(this).data('touched', false);
-            return;
-        }
-        e.preventDefault();
-
-        var isMobile = (window.innerWidth <= 992 || $(window).width() <= 992 || (window.matchMedia && window.matchMedia('(max-width: 992px)').matches));
-
-        if (isMobile) {
-            $('#sidebar').toggleClass('sidebar-open');
-            $('body').toggleClass('sidebar-open');
-            $('#sidebarOverlay, .sidebar-overlay').toggleClass('active');
-        } else {
-            $('body').toggleClass('sidebar-mini');
-        }
-    });
-
-    // Overlay click dismisses mobile sidebar
-    // Overlay Click Dismisses Sidebar
-    $(document).on('click touchstart', '#sidebarOverlay, .sidebar-overlay', function (e) {
-        e.preventDefault();
-        $('#sidebar').removeClass('sidebar-open active');
-        $('body').removeClass('sidebar-open');
-        $('#sidebarOverlay, .sidebar-overlay').removeClass('active');
-    });
-
-    // Mobile nav link click dismisses sidebar
-    $(document).on('click', '#sidebar a', function () {
-        var isMobile = (window.innerWidth <= 992 || $(window).width() <= 992 || (window.matchMedia && window.matchMedia('(max-width: 992px)').matches));
-        if (isMobile) {
-            $('#sidebar').removeClass('sidebar-open active');
-            $('body').removeClass('sidebar-open');
-            $('#sidebarOverlay, .sidebar-overlay').removeClass('active');
-        }
-    });
 });
 
 // =========================================================================
 // UNIVERSAL GLOBAL TOGGLE HANDLERS (SIDEBAR, PASSWORDS, CHECKBOXES, STATUS)
 // =========================================================================
 
-// 1. Rock-Solid Global Sidebar Toggle (Delegated - Works on ALL pages & button IDs)
+// 1. Rock-Solid Global Sidebar Toggle (Single delegated handler - Works on ALL pages & button IDs)
 (function() {
+    let isToggling = false;
+
     function ensureOverlay() {
         if (!document.getElementById('sidebarOverlay') && !document.querySelector('.sidebar-overlay')) {
-            var ov = document.createElement('div');
+            const ov = document.createElement('div');
             ov.id = 'sidebarOverlay';
             ov.className = 'sidebar-overlay';
             document.body.appendChild(ov);
         }
     }
 
-    function handleSidebarToggle(e) {
-        var toggleBtn = e.target.closest('#sidebarToggle, #sidebarCollapse, .sidebar-toggle, [data-toggle="sidebar"], [data-bs-toggle="sidebar"], .btn-toggle-sidebar');
+    function toggleSidebar(e) {
+        const toggleBtn = e.target.closest('#sidebarToggle, #sidebarCollapse, .sidebar-toggle, [data-toggle="sidebar"], [data-bs-toggle="sidebar"], .btn-toggle-sidebar');
         if (!toggleBtn) return;
 
         e.preventDefault();
         e.stopPropagation();
 
+        if (isToggling) return;
+        isToggling = true;
+        setTimeout(() => { isToggling = false; }, 250);
+
         ensureOverlay();
 
-        var sidebar = document.getElementById('sidebar');
-        var overlay = document.getElementById('sidebarOverlay') || document.querySelector('.sidebar-overlay');
-        var isMobile = (window.innerWidth <= 992 || (window.matchMedia && window.matchMedia('(max-width: 992px)').matches));
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebarOverlay') || document.querySelector('.sidebar-overlay');
+        const isMobile = (window.innerWidth <= 992 || (window.matchMedia && window.matchMedia('(max-width: 992px)').matches));
 
         if (isMobile) {
-            document.body.classList.toggle('sidebar-open');
+            // Mobile: slide drawer in/out
+            document.body.classList.remove('sidebar-mini');
+            if (sidebar) sidebar.classList.remove('sidebar-collapsed');
+
+            const isOpen = document.body.classList.toggle('sidebar-open');
             if (sidebar) {
-                sidebar.classList.toggle('sidebar-open');
-                sidebar.classList.toggle('active');
+                sidebar.classList.toggle('sidebar-open', isOpen);
+                sidebar.classList.toggle('active', isOpen);
             }
-            if (overlay) overlay.classList.toggle('active');
+            if (overlay) {
+                overlay.classList.toggle('active', isOpen);
+            }
         } else {
-            document.body.classList.toggle('sidebar-mini');
-            if (sidebar) sidebar.classList.toggle('active');
+            // Desktop: Toggle sidebar-mini
+            document.body.classList.remove('sidebar-open');
+            if (sidebar) {
+                sidebar.classList.remove('sidebar-open');
+                sidebar.classList.remove('active');
+            }
+            if (overlay) {
+                overlay.classList.remove('active');
+            }
+
+            const isMini = document.body.classList.toggle('sidebar-mini');
+            if (sidebar) {
+                sidebar.classList.toggle('sidebar-collapsed', isMini);
+            }
             try {
-                localStorage.setItem('crm_sidebar_mini', document.body.classList.contains('sidebar-mini') ? '1' : '0');
+                localStorage.setItem('crm_sidebar_mini', isMini ? '1' : '0');
             } catch(ex){}
         }
     }
 
     function handleGlobalDismiss(e) {
-        var isOverlay = e.target.closest('#sidebarOverlay, .sidebar-overlay');
-        var isNavLink = e.target.closest('#sidebar a');
-        var isMobile = (window.innerWidth <= 992 || (window.matchMedia && window.matchMedia('(max-width: 992px)').matches));
+        const isOverlay = e.target.closest('#sidebarOverlay, .sidebar-overlay');
+        const isNavLink = e.target.closest('#sidebar a');
+        const isMobile = (window.innerWidth <= 992 || (window.matchMedia && window.matchMedia('(max-width: 992px)').matches));
 
         if ((isOverlay || isNavLink) && isMobile) {
-            var sidebar = document.getElementById('sidebar');
-            var overlay = document.getElementById('sidebarOverlay') || document.querySelector('.sidebar-overlay');
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay') || document.querySelector('.sidebar-overlay');
             if (sidebar) {
                 sidebar.classList.remove('sidebar-open');
                 sidebar.classList.remove('active');
@@ -610,19 +685,35 @@ $(document).ready(function () {
 
     function restoreSidebarPreference() {
         ensureOverlay();
-        var isMobile = (window.innerWidth <= 992 || (window.matchMedia && window.matchMedia('(max-width: 992px)').matches));
+        const isMobile = (window.innerWidth <= 992 || (window.matchMedia && window.matchMedia('(max-width: 992px)').matches));
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebarOverlay') || document.querySelector('.sidebar-overlay');
+
         if (isMobile) {
             document.body.classList.remove('sidebar-mini');
+            if (sidebar) sidebar.classList.remove('sidebar-collapsed');
         } else {
+            document.body.classList.remove('sidebar-open');
+            if (sidebar) {
+                sidebar.classList.remove('sidebar-open');
+                sidebar.classList.remove('active');
+            }
+            if (overlay) overlay.classList.remove('active');
+
             try {
                 if (localStorage.getItem('crm_sidebar_mini') === '1') {
                     document.body.classList.add('sidebar-mini');
+                    if (sidebar) sidebar.classList.add('sidebar-collapsed');
+                } else {
+                    document.body.classList.remove('sidebar-mini');
+                    if (sidebar) sidebar.classList.remove('sidebar-collapsed');
                 }
             } catch(ex){}
         }
     }
 
-    document.addEventListener('click', handleSidebarToggle);
+    // Attach single delegated capture-phase listener to avoid duplicate/inline conflicts
+    document.addEventListener('click', toggleSidebar, true);
     document.addEventListener('click', handleGlobalDismiss);
     window.addEventListener('resize', restoreSidebarPreference);
 
@@ -685,6 +776,10 @@ window.toggleRowPassword = function(userId) {
 // 3. Global Select-All Checkboxes Toggle
 window.toggleAllCheckboxes = function(className, isChecked) {
     document.querySelectorAll('.' + className).forEach(function(cb) {
+        // Keep protected statuses (Follow Up, INT, Booked, Converted) safe from bulk Select All
+        if (className === 'status_shuffle_cb' && isChecked && cb.hasAttribute('data-protected')) {
+            return;
+        }
         cb.checked = isChecked;
         if (typeof $(cb).trigger === 'function') $(cb).trigger('change');
     });
@@ -818,10 +913,11 @@ function saveCustomerName(wrapper) {
             if (typeof showCrmToast === 'function') showCrmToast(msg, 'error');
             else alert(msg);
         }
-    }).fail(function () {
+    }).fail(function (xhr) {
         input.prop('disabled', false);
-        if (typeof showCrmToast === 'function') showCrmToast('Server error while updating name', 'error');
-        else alert('Server error while updating name');
+        var errMsg = (xhr && xhr.responseJSON && xhr.responseJSON.message) ? xhr.responseJSON.message : 'Server error while updating name';
+        if (typeof showCrmToast === 'function') showCrmToast(errMsg, 'error');
+        else alert(errMsg);
     });
 }
 
@@ -836,5 +932,467 @@ $(document).on('keypress', '.customer-name-input', function (e) {
         saveCustomerName($(this).closest('.customer-name-wrapper'));
     }
 });
+
+// =========================================================================
+// Dynamic Site Locations Management Module
+// =========================================================================
+window._activeSiteLocationSelect = null;
+
+function renderSiteLocationBadges(locations) {
+    var container = $('#siteLocationsListContainer');
+    if (!container.length) return;
+
+    var defaultLocs = ['DGC-I', 'DGC-II', 'DGC-III', 'SGC', 'NGC', 'DGC-IV', 'Multiple Sites', 'All SITES', 'Other'];
+    var countBadge = $('#siteLocationsCountBadge');
+    if (countBadge.length) {
+        countBadge.text(locations.length + ' Locations');
+    }
+
+    if (!locations || !locations.length) {
+        container.html('<div class="text-muted small py-2">No locations found.</div>');
+        return;
+    }
+
+    var html = '';
+    locations.forEach(function (loc) {
+        var isDefault = defaultLocs.some(function (d) { return d.toLowerCase() === loc.toLowerCase(); });
+        var safeLoc = $('<div>').text(loc).html();
+        if (isDefault) {
+            html += '<span class="badge bg-white text-dark border px-2.5 py-1.5 shadow-sm d-inline-flex align-items-center gap-1 font-monospace" style="font-size: 11.5px; font-weight: 600;">' +
+                    '<i class="fa-solid fa-building text-secondary opacity-75" style="font-size: 10px;"></i> ' + safeLoc +
+                    '</span>';
+        } else {
+            html += '<span class="badge bg-primary-subtle text-primary border border-primary-subtle px-2.5 py-1.5 shadow-sm d-inline-flex align-items-center gap-1.5" style="font-size: 11.5px; font-weight: 700;">' +
+                    '<i class="fa-solid fa-map-pin text-primary" style="font-size: 10px;"></i> ' + safeLoc +
+                    '<button type="button" class="btn btn-xs p-0 border-0 bg-transparent text-danger btn-delete-custom-location ms-1" data-location="' + safeLoc + '" title="Remove location" style="line-height: 1; font-size: 11px;">' +
+                    '<i class="fa-solid fa-xmark"></i>' +
+                    '</button>' +
+                    '</span>';
+        }
+    });
+    container.html(html);
+}
+
+function loadSiteLocationsBadges(callback) {
+    var container = $('#siteLocationsListContainer');
+    if (container.length) {
+        container.html('<div class="text-center w-100 py-3 text-muted small"><i class="fa-solid fa-spinner fa-spin me-1"></i> Loading locations...</div>');
+    }
+    $.get('api/manage_site_locations.php', { action: 'list' }, function (res) {
+        if (res && res.status === 'success' && Array.isArray(res.locations)) {
+            renderSiteLocationBadges(res.locations);
+            if (typeof callback === 'function') callback(res.locations);
+        }
+    }).fail(function () {
+        if (container.length) {
+            container.html('<div class="text-danger small py-2">Failed to load locations.</div>');
+        }
+    });
+}
+
+window.openSiteLocationModal = function (forSelectEl) {
+    window._activeSiteLocationSelect = forSelectEl || null;
+    var modalEl = document.getElementById('manageSiteLocationsModal');
+    if (!modalEl) return;
+    var modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+    modal.show();
+    loadSiteLocationsBadges();
+    setTimeout(function () {
+        $('#newSiteLocationInput').val('').focus();
+    }, 350);
+};
+
+// Open from Header "+ Add" button
+$(document).on('click', '.btn-open-site-locations-modal', function (e) {
+    e.preventDefault();
+    openSiteLocationModal(null);
+});
+
+// Detect selecting "+ Add New Location..." in telecaller/standard forms
+$(document).on('change', 'select[name="site_location"]', function () {
+    var sel = $(this);
+    if (sel.val() === '__add_new_location__') {
+        openSiteLocationModal(sel);
+    }
+});
+
+// Add New Location Action
+function submitNewSiteLocation() {
+    var input = $('#newSiteLocationInput');
+    var val = input.val().trim();
+    var btn = $('#btnAddNewSiteLocation');
+
+    if (!val) {
+        input.focus();
+        if (typeof showCrmToast === 'function') showCrmToast('Please enter a location name', 'error');
+        return;
+    }
+
+    btn.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i>');
+
+    $.post('api/manage_site_locations.php', {
+        action: 'add',
+        name: val
+    }, function (res) {
+        btn.prop('disabled', false).html('<i class="fa-solid fa-plus"></i> <span>Add</span>');
+        if (res && res.status === 'success') {
+            var locName = res.location || val;
+
+            // 1. Add option to ALL site_location dropdowns across the page
+            $('select[data-field="site_location"], select[name="site_location"]').each(function () {
+                var $sel = $(this);
+                var exists = false;
+                $sel.find('option').each(function () {
+                    if ($(this).val().toLowerCase() === locName.toLowerCase()) {
+                        exists = true;
+                        return false;
+                    }
+                });
+                if (!exists) {
+                    var newOpt = $('<option></option>').val(locName).text(locName);
+                    var $addOpt = $sel.find('option[value="__add_new_location__"]');
+                    if ($addOpt.length) {
+                        newOpt.insertBefore($addOpt);
+                    } else {
+                        $sel.append(newOpt);
+                    }
+                }
+            });
+
+            // 2. If opened from a specific row select, select it & auto-save
+            if (window._activeSiteLocationSelect && window._activeSiteLocationSelect.length) {
+                window._activeSiteLocationSelect.val(locName);
+                if (window._activeSiteLocationSelect.hasClass('excel-cell-select')) {
+                    if (typeof saveExcelCell === 'function') {
+                        saveExcelCell(window._activeSiteLocationSelect);
+                    }
+                }
+                if (typeof showCrmToast === 'function') {
+                    showCrmToast('Site Location "' + locName + '" added and assigned!', 'success');
+                }
+                var modalEl = document.getElementById('manageSiteLocationsModal');
+                if (modalEl) {
+                    var modal = bootstrap.Modal.getInstance(modalEl);
+                    if (modal) modal.hide();
+                }
+                window._activeSiteLocationSelect = null;
+            } else {
+                if (typeof showCrmToast === 'function') {
+                    showCrmToast(res.message || 'Location added successfully!', 'success');
+                }
+                input.val('').focus();
+                if (Array.isArray(res.locations)) {
+                    renderSiteLocationBadges(res.locations);
+                } else {
+                    loadSiteLocationsBadges();
+                }
+            }
+        } else {
+            var errMsg = (res && res.message) ? res.message : 'Error adding location';
+            if (typeof showCrmToast === 'function') showCrmToast(errMsg, 'error');
+            else alert(errMsg);
+        }
+    }).fail(function (xhr) {
+        btn.prop('disabled', false).html('<i class="fa-solid fa-plus"></i> <span>Add</span>');
+        var msg = 'Failed to add site location.';
+        if (xhr.responseJSON && xhr.responseJSON.message) msg = xhr.responseJSON.message;
+        if (typeof showCrmToast === 'function') showCrmToast(msg, 'error');
+        else alert(msg);
+    });
+}
+
+$(document).on('click', '#btnAddNewSiteLocation', function (e) {
+    e.preventDefault();
+    submitNewSiteLocation();
+});
+
+$(document).on('keypress', '#newSiteLocationInput', function (e) {
+    if (e.which === 13) {
+        e.preventDefault();
+        submitNewSiteLocation();
+    }
+});
+
+// Delete custom location
+$(document).on('click', '.btn-delete-custom-location', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var locName = $(this).data('location');
+    if (!locName) return;
+
+    if (!confirm('Are you sure you want to remove the custom site location "' + locName + '"?')) {
+        return;
+    }
+
+    $.post('api/manage_site_locations.php', {
+        action: 'delete',
+        name: locName
+    }, function (res) {
+        if (res && res.status === 'success') {
+            if (typeof showCrmToast === 'function') {
+                showCrmToast(res.message || 'Location removed.', 'success');
+            }
+            // Remove option from dropdowns if not currently selected
+            $('select[data-field="site_location"], select[name="site_location"]').each(function () {
+                var $sel = $(this);
+                if ($sel.val() !== locName) {
+                    $sel.find('option').filter(function () {
+                        return $(this).val() === locName;
+                    }).remove();
+                }
+            });
+            if (Array.isArray(res.locations)) {
+                renderSiteLocationBadges(res.locations);
+            } else {
+                loadSiteLocationsBadges();
+            }
+        } else {
+            var errMsg = (res && res.message) ? res.message : 'Error deleting location';
+            if (typeof showCrmToast === 'function') showCrmToast(errMsg, 'error');
+            else alert(errMsg);
+        }
+    }).fail(function () {
+        if (typeof showCrmToast === 'function') showCrmToast('Failed to delete location.', 'error');
+    });
+});
+
+// Revert selection if user closes modal without adding
+$(document).on('hidden.bs.modal', '#manageSiteLocationsModal', function () {
+    if (window._activeSiteLocationSelect && window._activeSiteLocationSelect.length) {
+        if (window._activeSiteLocationSelect.val() === '__add_new_location__') {
+            var prevVal = window._activeSiteLocationSelect.data('initial-val') || '';
+            window._activeSiteLocationSelect.val(prevVal);
+        }
+        window._activeSiteLocationSelect = null;
+    }
+    $('#newSiteLocationInput').val('');
+    $('#siteLocationFeedback').addClass('d-none').text('');
+});
+
+// ==========================================
+// DYNAMIC BUDGET RANGES MANAGEMENT
+// ==========================================
+window.loadBudgetsBadges = function () {
+    var container = $('#budgetsListContainer');
+    var badgeCount = $('#budgetsCountBadge');
+    container.html('<div class="text-center w-100 py-3 text-muted small"><i class="fa-solid fa-spinner fa-spin me-1"></i> Loading budget ranges...</div>');
+
+    $.get('api/manage_budgets.php', { action: 'list' }, function (res) {
+        if (res && res.status === 'success' && Array.isArray(res.budgets)) {
+            renderBudgetBadges(res.budgets);
+        } else {
+            container.html('<div class="text-danger small py-2">Failed to load budget ranges.</div>');
+        }
+    }).fail(function () {
+        container.html('<div class="text-danger small py-2">Error connecting to budget server.</div>');
+    });
+};
+
+function renderBudgetBadges(budgets) {
+    var container = $('#budgetsListContainer');
+    var badgeCount = $('#budgetsCountBadge');
+    container.empty();
+
+    if (!budgets || !budgets.length) {
+        container.html('<div class="text-muted small py-2">No budget ranges configured yet.</div>');
+        badgeCount.text('0 Options');
+        return;
+    }
+
+    badgeCount.text(budgets.length + ' Options');
+
+    budgets.forEach(function (b) {
+        var pill = $('<span class="badge bg-white text-dark border shadow-sm px-2.5 py-1.5 d-inline-flex align-items-center gap-1.5 rounded-pill" style="font-size: 12px;"></span>');
+        pill.append('<i class="fa-solid fa-wallet text-success" style="font-size: 11px;"></i>');
+        pill.append($('<span></span>').text(b));
+
+        var delBtn = $('<button type="button" class="btn-close btn-close-xs btn-delete-custom-budget ms-1" title="Delete budget range" style="font-size: 8px;"></button>');
+        delBtn.data('budget', b);
+        pill.append(delBtn);
+
+        container.append(pill);
+    });
+}
+
+window.openBudgetModal = function (forSelectEl) {
+    window._activeBudgetSelect = forSelectEl || null;
+    var modalEl = document.getElementById('manageBudgetsModal');
+    if (!modalEl) return;
+    var modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+    modal.show();
+    loadBudgetsBadges();
+    setTimeout(function () {
+        $('#newBudgetInput').val('').focus();
+    }, 350);
+};
+
+// Open from Header "+ Add" button
+$(document).on('click', '.btn-open-budgets-modal', function (e) {
+    e.preventDefault();
+    openBudgetModal(null);
+});
+
+// Detect selecting "+ Add New Budget..." in standard forms
+$(document).on('change', 'select[name="budget"]', function () {
+    var sel = $(this);
+    if (sel.val() === '__add_new_budget__') {
+        openBudgetModal(sel);
+    }
+});
+
+// Add New Budget Action
+function submitNewBudget() {
+    var input = $('#newBudgetInput');
+    var val = input.val().trim();
+    var btn = $('#btnAddNewBudget');
+
+    if (!val) {
+        input.focus();
+        if (typeof showCrmToast === 'function') showCrmToast('Please enter a budget range (e.g. 0 - 10 Lakhs)', 'error');
+        return;
+    }
+
+    btn.prop('disabled', true).html('<i class="fa-solid fa-spinner fa-spin"></i>');
+
+    $.post('api/manage_budgets.php', {
+        action: 'add',
+        name: val
+    }, function (res) {
+        btn.prop('disabled', false).html('<i class="fa-solid fa-plus"></i> <span>Add</span>');
+        if (res && res.status === 'success') {
+            var bName = res.budget || val;
+
+            // 1. Add option to ALL budget dropdowns across the page
+            $('select[data-field="budget"], select[name="budget"]').each(function () {
+                var $sel = $(this);
+                var exists = false;
+                $sel.find('option').each(function () {
+                    if ($(this).val().toLowerCase() === bName.toLowerCase()) {
+                        exists = true;
+                        return false;
+                    }
+                });
+                if (!exists) {
+                    var newOpt = $('<option></option>').val(bName).text(bName);
+                    var $addOpt = $sel.find('option[value="__add_new_budget__"]');
+                    if ($addOpt.length) {
+                        newOpt.insertBefore($addOpt);
+                    } else {
+                        $sel.append(newOpt);
+                    }
+                }
+            });
+
+            // 2. If opened from a specific row select, select it & auto-save
+            if (window._activeBudgetSelect && window._activeBudgetSelect.length) {
+                window._activeBudgetSelect.val(bName);
+                if (window._activeBudgetSelect.hasClass('excel-cell-select')) {
+                    if (typeof saveExcelCell === 'function') {
+                        saveExcelCell(window._activeBudgetSelect);
+                    }
+                }
+                if (typeof showCrmToast === 'function') {
+                    showCrmToast('Budget range "' + bName + '" added and assigned!', 'success');
+                }
+                var modalEl = document.getElementById('manageBudgetsModal');
+                if (modalEl) {
+                    var modal = bootstrap.Modal.getInstance(modalEl);
+                    if (modal) modal.hide();
+                }
+                window._activeBudgetSelect = null;
+            } else {
+                if (typeof showCrmToast === 'function') {
+                    showCrmToast(res.message || 'Budget range added successfully!', 'success');
+                }
+                input.val('').focus();
+                if (Array.isArray(res.budgets)) {
+                    renderBudgetBadges(res.budgets);
+                } else {
+                    loadBudgetsBadges();
+                }
+            }
+        } else {
+            var errMsg = (res && res.message) ? res.message : 'Error adding budget';
+            if (typeof showCrmToast === 'function') showCrmToast(errMsg, 'error');
+            else alert(errMsg);
+        }
+    }).fail(function (xhr) {
+        btn.prop('disabled', false).html('<i class="fa-solid fa-plus"></i> <span>Add</span>');
+        var msg = 'Failed to add budget range.';
+        if (xhr.responseJSON && xhr.responseJSON.message) msg = xhr.responseJSON.message;
+        if (typeof showCrmToast === 'function') showCrmToast(msg, 'error');
+        else alert(msg);
+    });
+}
+
+$(document).on('click', '#btnAddNewBudget', function (e) {
+    e.preventDefault();
+    submitNewBudget();
+});
+
+$(document).on('keypress', '#newBudgetInput', function (e) {
+    if (e.which === 13) {
+        e.preventDefault();
+        submitNewBudget();
+    }
+});
+
+// Delete custom budget
+$(document).on('click', '.btn-delete-custom-budget', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var bName = $(this).data('budget');
+    if (!bName) return;
+
+    if (!confirm('Are you sure you want to remove the budget range "' + bName + '"?')) {
+        return;
+    }
+
+    $.post('api/manage_budgets.php', {
+        action: 'delete',
+        name: bName
+    }, function (res) {
+        if (res && res.status === 'success') {
+            if (typeof showCrmToast === 'function') {
+                showCrmToast(res.message || 'Budget range removed.', 'success');
+            }
+            // Remove option from dropdowns if not currently selected
+            $('select[data-field="budget"], select[name="budget"]').each(function () {
+                var $sel = $(this);
+                if ($sel.val() !== bName) {
+                    $sel.find('option').filter(function () {
+                        return $(this).val() === bName;
+                    }).remove();
+                }
+            });
+            if (Array.isArray(res.budgets)) {
+                renderBudgetBadges(res.budgets);
+            } else {
+                loadBudgetsBadges();
+            }
+        } else {
+            var errMsg = (res && res.message) ? res.message : 'Error deleting budget';
+            if (typeof showCrmToast === 'function') showCrmToast(errMsg, 'error');
+            else alert(errMsg);
+        }
+    }).fail(function () {
+        if (typeof showCrmToast === 'function') showCrmToast('Failed to delete budget range.', 'error');
+    });
+});
+
+// Revert selection if user closes modal without adding
+$(document).on('hidden.bs.modal', '#manageBudgetsModal', function () {
+    if (window._activeBudgetSelect && window._activeBudgetSelect.length) {
+        if (window._activeBudgetSelect.val() === '__add_new_budget__') {
+            var prevVal = window._activeBudgetSelect.data('initial-val') || '';
+            window._activeBudgetSelect.val(prevVal);
+        }
+        window._activeBudgetSelect = null;
+    }
+    $('#newBudgetInput').val('');
+    $('#budgetFeedback').addClass('d-none').text('');
+});
+
+
 
 

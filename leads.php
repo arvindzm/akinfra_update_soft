@@ -49,7 +49,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action']) && 
 
         $lead_type = trim($_POST['lead_type'] ?? 'FL');
         $initial_code = generateLeadCode('manual', date('Y-m-d H:i:s'), null, $lead_type);
-        $insert_stmt = $pdo->prepare("INSERT INTO leads (lead_code, source, project, name, email, phone, status, telecaller_id) VALUES (?, 'manual', ?, ?, ?, ?, 'New', ?)");
+        $insert_stmt = $pdo->prepare("INSERT INTO leads (lead_code, source, project, name, email, phone, status, telecaller_id) VALUES (?, 'manual', ?, ?, ?, ?, 'OTH', ?)");
         $insert_stmt->execute([$initial_code, $canonical_project, $name, $email, $phone, $assigned_telecaller]);
         $new_lead_id = $pdo->lastInsertId();
         $final_lead_code = generateLeadCode('manual', date('Y-m-d H:i:s'), $new_lead_id, $lead_type);
@@ -91,8 +91,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action']) && 
     $proj_filter      = !empty($_POST['project_filter']) ? trim($_POST['project_filter']) : null;
     $lead_limit       = (int)($_POST['lead_limit'] ?? 0);
     $reset_to_new     = isset($_POST['reset_status_new']) ? (bool)$_POST['reset_status_new'] : true;
+    $date_scope       = trim($_POST['date_scope'] ?? 'today');
+    $from_date        = !empty($_POST['shuffle_from_date']) ? trim($_POST['shuffle_from_date']) : null;
+    $to_date          = !empty($_POST['shuffle_to_date']) ? trim($_POST['shuffle_to_date']) : null;
 
-    $res = shuffleTelecallerLeads($pdo, $source_user_ids, 'checkbox_mode', $target_user_ids, $statuses, [], $proj_filter, $lead_limit, $reset_to_new, $selected_lead_ids);
+    $res = shuffleTelecallerLeads($pdo, $source_user_ids, 'checkbox_mode', $target_user_ids, $statuses, [], $proj_filter, $lead_limit, $reset_to_new, $selected_lead_ids, $date_scope, $from_date, $to_date);
     if ($res['count'] > 0) {
         $success = $res['message'];
     } else {
@@ -118,21 +121,34 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action']) && 
     }
 }
 
-// Handle Single Lead Assignment to Salesperson by Admin
-if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action']) && $_POST['action'] === 'assign_to_salesperson') {
-    $lead_id = intval($_POST['lead_id']);
-    $salesperson_id = intval($_POST['salesperson_id']);
-    $admin_note = trim($_POST['admin_note'] ?? '');
+// Handle Single Lead Assignment to Salesperson or Unassign by Admin
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && isset($_POST['action']) && in_array($_POST['action'], ['assign_to_salesperson', 'unassign_sales_lead'])) {
+    $lead_id = intval($_POST['lead_id'] ?? 0);
+    $salesperson_id = intval($_POST['salesperson_id'] ?? -1);
+    $admin_note = trim($_POST['admin_note'] ?? ($_POST['reason'] ?? ''));
 
-    if ($lead_id > 0 && $salesperson_id > 0) {
-        $res = assignLeadToSalesPerson($pdo, $lead_id, $salesperson_id, $_SESSION['user_id'], $admin_note);
-        if ($res['status'] === 'success') {
-            $success = $res['message'];
+    if ($_POST['action'] === 'unassign_sales_lead' || $salesperson_id === 0) {
+        if ($lead_id > 0) {
+            $res = unassignLeadFromSales($pdo, $lead_id, $_SESSION['user_id'], $admin_note);
+            if ($res['status'] === 'success') {
+                $success = $res['message'];
+            } else {
+                $error = $res['message'];
+            }
         } else {
-            $error = $res['message'];
+            $error = "Invalid lead selected.";
         }
     } else {
-        $error = "Please select a valid Salesperson.";
+        if ($lead_id > 0 && $salesperson_id > 0) {
+            $res = assignLeadToSalesPerson($pdo, $lead_id, $salesperson_id, $_SESSION['user_id'], $admin_note);
+            if ($res['status'] === 'success') {
+                $success = $res['message'];
+            } else {
+                $error = $res['message'];
+            }
+        } else {
+            $error = "Please select a valid Salesperson or Manager.";
+        }
     }
 }
 
@@ -204,18 +220,9 @@ if (isset($_GET['redistribute_absent'])) {
     }
 }
 
-// Handle Manual Lead Redistribution for Unassigned Leads
+// Handle Manual Lead Redistribution for Unassigned Leads (LOCKED BY ADMIN DIRECTIVE)
 if (isset($_GET['redistribute_unassigned'])) {
-    $res = redistributeTelecallerLeads($pdo, null);
-    if ($res['reassigned'] > 0) {
-        $success = "Successfully redistributed {$res['reassigned']} unassigned lead(s) among {$res['telecallers_count']} present telecaller(s)!";
-    } else {
-        if ($res['telecallers_count'] == 0) {
-            $error = "No present telecallers available to assign leads to.";
-        } else {
-            $info_msg = "No unassigned leads found. All leads are currently assigned.";
-        }
-    }
+    $info_msg = "⚠️ Lead redistribution is locked by Admin Directive to protect telecaller historical data and remarks. Unassigned archive leads remain safely preserved in Total Leads Directory. If any lead has INT or Follow-Up, please use the Restore INT/Follow-up tool.";
 }
 
 // Handle Bulk Auto-Assignment by Project
@@ -224,25 +231,73 @@ if (isset($_GET['auto_assign_all_leads'])) {
     $success = "Successfully categorized and distributed {$cnt} lead(s) to their respective project team members!";
 }
 
+// Handle 1-click Repair of Corrupted Lead Codes containing phone numbers
+if (isset($_GET['fix_corrupted_codes'])) {
+    try {
+        $corrupt_stmt = $pdo->query("SELECT id, lead_code, source, project, created_at FROM leads WHERE lead_code REGEXP '^[A-Za-z]{2,5}[0-9]{6}[0-9]{7,}$'");
+        $corrupt_leads = $corrupt_stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($corrupt_leads)) {
+            $up_stmt = $pdo->prepare("UPDATE leads SET lead_code = ? WHERE id = ?");
+            $day_prefix_counters = [];
+            $repaired_cnt = 0;
+            foreach ($corrupt_leads as $c_lead) {
+                $c_dt = !empty($c_lead['created_at']) ? date('dmy', strtotime($c_lead['created_at'])) : date('dmy');
+                $c_pfx = getLeadPrefix($c_lead['source'] ?? '', $c_lead['project'] ?? null);
+                $key = "{$c_dt}_{$c_pfx}";
+                if (!isset($day_prefix_counters[$key])) {
+                    $max_stmt = $pdo->prepare("SELECT lead_code FROM leads WHERE lead_code LIKE ? AND lead_code REGEXP '^[A-Za-z]{2,5}[0-9]{6}[0-9]{1,6}$'");
+                    $max_stmt->execute(["{$c_pfx}{$c_dt}%"]);
+                    $existing_codes = $max_stmt->fetchAll(PDO::FETCH_COLUMN);
+                    $max_seq = 0;
+                    foreach ($existing_codes as $ec) {
+                        if (preg_match('/^[A-Za-z]{2,5}\d{6}(\d+)$/', $ec, $em)) {
+                            $max_seq = max($max_seq, (int)$em[1]);
+                        }
+                    }
+                    $day_prefix_counters[$key] = $max_seq;
+                }
+                $day_prefix_counters[$key]++;
+                $new_c = sprintf('%s%s%04d', $c_pfx, $c_dt, $day_prefix_counters[$key]);
+                $up_stmt->execute([$new_c, $c_lead['id']]);
+                $repaired_cnt++;
+            }
+            $success = "Successfully repaired {$repaired_cnt} corrupted lead code(s)! Only lead codes were updated.";
+        } else {
+            $info_msg = "No corrupted lead codes found in database.";
+        }
+    } catch (Throwable $e_fix) {
+        $error = "Error repairing lead codes: " . $e_fix->getMessage();
+    }
+}
+
 // Fetch count of unassigned leads
 $unassigned_leads_count = $pdo->query("SELECT COUNT(*) FROM leads WHERE telecaller_id IS NULL OR telecaller_id NOT IN (SELECT id FROM users WHERE role = 'telecaller')")->fetchColumn();
 
-// Fetch count of untouched leads belonging to ABSENT telecallers
+// Fetch count of untouched leads belonging to ABSENT telecallers (Indexed NOT EXISTS)
 $absent_leads_count = $pdo->query("
-    SELECT COUNT(*) FROM leads 
-    WHERE telecaller_id IN (SELECT id FROM users WHERE role = 'telecaller' AND is_present = 0)
-      AND status = 'New' 
-      AND id NOT IN (SELECT DISTINCT lead_id FROM lead_notes)
+    SELECT COUNT(*) FROM leads l
+    WHERE l.telecaller_id IN (SELECT id FROM users WHERE role = 'telecaller' AND is_present = 0)
+      AND l.status = 'New' 
+      AND NOT EXISTS (SELECT 1 FROM lead_notes ln WHERE ln.lead_id = l.id)
 ")->fetchColumn();
 
 // Handle Search and Filter
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
+$source_filter = isset($_GET['source']) ? trim($_GET['source']) : '';
+$campaign_name_filter = isset($_GET['campaign_name']) ? trim($_GET['campaign_name']) : (isset($_GET['campaign']) ? trim($_GET['campaign']) : '');
 $project_filter = isset($_GET['project']) ? trim($_GET['project']) : '';
 $from_date = isset($_GET['from_date']) ? trim($_GET['from_date']) : '';
 $to_date = isset($_GET['to_date']) ? trim($_GET['to_date']) : '';
-$filter_preset = isset($_GET['filter']) ? trim($_GET['filter']) : '';
-$telecaller_filter = isset($_GET['telecaller_id']) ? intval($_GET['telecaller_id']) : 0;
+$filter_preset = isset($_GET['filter']) ? trim($_GET['filter']) : (isset($_GET['filter_preset']) ? trim($_GET['filter_preset']) : '');
+$telecaller_filter = isset($_GET['telecaller_id']) ? trim($_GET['telecaller_id']) : '';
+$salesperson_filter = isset($_GET['salesperson_id']) ? trim($_GET['salesperson_id']) : '';
+$site_visit_param = isset($_GET['site_visit']) ? strtolower(trim($_GET['site_visit'])) : '';
+if ($site_visit_param === '' && $status_filter === 'site_visit_done') $site_visit_param = 'completed';
+if ($site_visit_param === '' && $status_filter === 'site_visit_sched') $site_visit_param = 'scheduled';
+if ($site_visit_param === '' && ($status_filter === 'site_visit' || $filter_preset === 'site_visit')) $site_visit_param = 'all';
+if ($site_visit_param === '1') $site_visit_param = 'all';
+$site_visit_filter = in_array($site_visit_param, ['completed', 'done', 'scheduled', 'sched', 'all', '1']);
 
 // Apply Quick Preset Filters if dates are not explicitly specified
 if ($filter_preset === 'today' && empty($from_date) && empty($to_date)) {
@@ -264,11 +319,17 @@ if ($filter_preset === 'today' && empty($from_date) && empty($to_date)) {
 
 $campaign_filter = isset($_GET['campaign_id']) ? intval($_GET['campaign_id']) : 0;
 
+$sales_managers_leads = $pdo->query("SELECT id, name, branch_name FROM users WHERE role = 'sales_manager' AND (is_active IS NULL OR is_active = 1) ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
+$sales_execs_leads = $pdo->query("SELECT u.id, u.name, u.branch_name, m.name as manager_name FROM users u LEFT JOIN users m ON u.manager_id = m.id WHERE u.role = 'sales' AND (u.is_active IS NULL OR u.is_active = 1) ORDER BY u.name ASC")->fetchAll(PDO::FETCH_ASSOC);
+
 $query = "
-    SELECT l.*, t.name as telecaller_name, s.name as sales_name, c.campaign_name, c.platform as campaign_platform, c.status as campaign_status
+    SELECT l.*, t.name as telecaller_name, s.name as sales_name, sm.name as sales_manager_name, 
+           COALESCE(sm.branch_name, s.branch_name) as sales_branch_title,
+           c.campaign_name, c.platform as campaign_platform, c.status as campaign_status
     FROM leads l
     LEFT JOIN users t ON l.telecaller_id = t.id
     LEFT JOIN users s ON l.salesperson_id = s.id
+    LEFT JOIN users sm ON l.sales_manager_id = sm.id
     LEFT JOIN ad_campaigns c ON l.campaign_id = c.id
     WHERE 1=1
 ";
@@ -298,48 +359,170 @@ if ($search !== '') {
     $query .= " AND (" . implode(" OR ", $search_conditions) . ")";
 }
 
-if ($status_filter !== '') {
-    $synonyms = [
-        'INT' => ['INT', 'Interested', 'In Progress'],
-        'Interested' => ['INT', 'Interested', 'In Progress'],
-        'In Progress' => ['INT', 'Interested', 'In Progress'],
-        'NI' => ['NI', 'Not Interested'],
-        'Not Interested' => ['NI', 'Not Interested'],
-        'OS' => ['OS', 'Out of Service'],
-        'Out of Service' => ['OS', 'Out of Service'],
-        'OTH_NOT_PICK' => ['OTH_NOT_PICK', 'RNR (No Response)'],
-        'RNR (No Response)' => ['OTH_NOT_PICK', 'RNR (No Response)'],
-        'OTH_BUSY' => ['OTH_BUSY', 'Busy / Callback'],
-        'Busy / Callback' => ['OTH_BUSY', 'Busy / Callback'],
-        'OTH_SWITCH_OFF' => ['OTH_SWITCH_OFF', 'Switched Off'],
-        'Switched Off' => ['OTH_SWITCH_OFF', 'Switched Off'],
-        'Invalid Number' => ['Invalid Number', 'Wrong Number'],
-        'Wrong Number' => ['Invalid Number', 'Wrong Number'],
-        'Call Disconnect' => ['Call Disconnect', 'Call Disconnected'],
-        'Call Disconnected' => ['Call Disconnect', 'Call Disconnected'],
-        'OTH Call Back' => ['OTH Call Back', 'OTH_CALL_BACK'],
-        'OTH_CALL_BACK' => ['OTH Call Back', 'OTH_CALL_BACK'],
-        'Assigned to Sales' => ['Assigned to Sales', 'Forward to Sales'],
-        'Forward to Sales' => ['Assigned to Sales', 'Forward to Sales'],
-        'Booked / Token Paid' => ['Booked / Token Paid', 'Booked / Token'],
-        'Booked / Token' => ['Booked / Token Paid', 'Booked / Token'],
-    ];
-
-    if (isset($synonyms[$status_filter])) {
-        $st_in = implode(',', array_fill(0, count($synonyms[$status_filter]), '?'));
-        $query .= " AND l.status IN ($st_in)";
-        foreach ($synonyms[$status_filter] as $sf) {
-            $params[] = $sf;
-        }
+if ($status_filter !== '' && !in_array($status_filter, ['site_visit', 'site_visit_done', 'site_visit_sched'])) {
+    if (strtoupper($status_filter) === 'OS') {
+        $query .= " AND (l.status = 'OS' OR l.status LIKE '%Other Site%' OR l.status LIKE '%Out of Station%')";
+    } elseif (strtoupper($status_filter) === 'INT') {
+        $query .= " AND (l.status IN ('INT', 'INT_VISIT_DONE') OR l.status LIKE '%INT%' OR l.status LIKE '%Interested%')";
+    } elseif ($status_filter === 'transferred_to_admin') {
+        $query .= " AND (
+            NOT (
+                l.status IN ('INT_VISIT_DONE', 'Site Visit Scheduled', 'Site Visit Done', 'Re-Visit Scheduled', 'Converted', 'Booked', 'Booked / Token Paid')
+                OR LOWER(COALESCE(l.visit_status, '')) LIKE '%yes%'
+                OR LOWER(COALESCE(l.visit_status, '')) LIKE '%visit%'
+                OR LOWER(COALESCE(l.visit_done, '')) = 'yes'
+                OR l.site_visit_at IS NOT NULL
+                OR l.visit_date IS NOT NULL
+            )
+            AND (
+                (
+                    EXISTS (
+                        SELECT 1 FROM shuffled_leads_history slh 
+                        WHERE slh.lead_id = l.id 
+                          AND slh.to_telecaller_id = l.telecaller_id
+                          AND slh.shuffled_at < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    )
+                    OR (
+                        NOT EXISTS (
+                            SELECT 1 FROM shuffled_leads_history slh 
+                            WHERE slh.lead_id = l.id AND slh.to_telecaller_id = l.telecaller_id
+                        )
+                        AND DATE(l.created_at) < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                    )
+                )
+            )
+        )";
     } else {
         $query .= " AND l.status = ?";
         $params[] = $status_filter;
     }
 }
 
+// 1. Site Visits Filter (Completed vs Scheduled vs All - matching leaderboard & site visits hub)
+if ($site_visit_filter) {
+    $sv_non_visit = "l.status NOT IN ('NI', 'OTH_NOT_PICK', 'OTH_BUSY', 'OTH_SWITCH_OFF', 'OTH_NETWORK_ISSUE', 'OTH_CALL_BACK', 'OTH_INCOMING_OFF', 'OTH_CALL_DISCONNECTED', 'OTH_INVALID_NUMBER', 'OTH_OUT_OF_SERVICE', 'OTH_CALL_FORWARDED', 'NI_FO', 'Dead', 'Lost', 'Invalid', 'Dropped', 'Not Interested', 'OS', 'NEW', 'New', 'OTH')";
+    if ($site_visit_param === 'completed' || $site_visit_param === 'done') {
+        $query .= " AND (
+            l.status IN ('Site Visit Done', 'INT_VISIT_DONE')
+            OR ((l.site_visit_status = 'Completed' OR LOWER(COALESCE(l.visit_done, '')) = 'yes' OR LOWER(COALESCE(l.visit_status, '')) = 'done') AND ($sv_non_visit))
+        )";
+    } elseif ($site_visit_param === 'scheduled' || $site_visit_param === 'sched') {
+        $query .= " AND (
+            l.status IN ('Site Visit Scheduled', 'Re-Visit Scheduled')
+            OR (
+                (l.site_visit_at IS NOT NULL OR l.visit_date IS NOT NULL)
+                AND l.status NOT IN ('Site Visit Done', 'INT_VISIT_DONE')
+                AND (l.site_visit_status != 'Completed' OR l.site_visit_status IS NULL)
+                AND LOWER(COALESCE(l.visit_done, '')) != 'yes'
+                AND ($sv_non_visit)
+            )
+        )";
+    } else {
+        $query .= " AND (
+            l.status IN ('Site Visit Done', 'INT_VISIT_DONE', 'Site Visit Scheduled', 'Re-Visit Scheduled')
+            OR (
+                (l.site_visit_at IS NOT NULL OR l.visit_date IS NOT NULL OR l.site_visit_status = 'Completed' OR LOWER(COALESCE(l.visit_done, '')) = 'yes' OR LOWER(COALESCE(l.visit_status, '')) LIKE '%yes%' OR LOWER(COALESCE(l.visit_status, '')) LIKE '%visit%')
+                AND ($sv_non_visit)
+            )
+        )";
+    }
+}
+
+// 2. Preset Filter: Interested (INT)
+if ($filter_preset === 'int') {
+    $query .= " AND (l.status IN ('INT', 'INT_VISIT_DONE') OR l.status LIKE '%INT%' OR l.status LIKE '%Interested%')";
+}
+
+// 3. Preset Filter: Follow-up Leads
+if ($filter_preset === 'followup') {
+    $query .= " AND (l.status IN ('OTH_CALL_BACK', 'OTH_BUSY', 'NI_FO') OR l.followup_date IS NOT NULL OR l.follow_up_at IS NOT NULL OR l.followup_1 IS NOT NULL OR l.followup_2 IS NOT NULL OR l.upcoming_follow_up IS NOT NULL) AND l.status NOT IN ('NI', 'Dead', 'Lost', 'Converted', 'Booked / Token Paid')";
+}
+
+// 4. Preset Filter: Converted Leads
+if ($filter_preset === 'converted') {
+    $query .= " AND (l.booking_amount > 0 OR l.booking_date IS NOT NULL OR l.status IN ('Converted', 'Booked', 'Booked / Token Paid'))";
+}
+
+if ($filter_preset === 'transferred_to_admin' && $status_filter === '') {
+    $query .= " AND (
+        NOT (
+            l.status IN ('INT_VISIT_DONE', 'Site Visit Scheduled', 'Site Visit Done', 'Re-Visit Scheduled', 'Converted', 'Booked', 'Booked / Token Paid')
+            OR LOWER(COALESCE(l.visit_status, '')) LIKE '%yes%'
+            OR LOWER(COALESCE(l.visit_status, '')) LIKE '%visit%'
+            OR LOWER(COALESCE(l.visit_done, '')) = 'yes'
+            OR l.site_visit_at IS NOT NULL
+            OR l.visit_date IS NOT NULL
+        )
+        AND (
+            (
+                EXISTS (
+                    SELECT 1 FROM shuffled_leads_history slh 
+                    WHERE slh.lead_id = l.id 
+                      AND slh.to_telecaller_id = l.telecaller_id
+                      AND slh.shuffled_at < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                )
+                OR (
+                    NOT EXISTS (
+                        SELECT 1 FROM shuffled_leads_history slh 
+                        WHERE slh.lead_id = l.id AND slh.to_telecaller_id = l.telecaller_id
+                    )
+                    AND DATE(l.created_at) < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+                )
+            )
+        )
+    )";
+}
+
+if ($filter_preset === 'with_senior_tc' && $status_filter === '') {
+    $query .= " AND (
+        (l.status IN ('INT', 'Interested') OR (l.status LIKE '%INT%' AND l.status NOT LIKE '%VISIT%'))
+        AND NOT (
+            l.status IN ('INT_VISIT_DONE', 'Converted', 'Booked', 'Booked / Token Paid')
+            OR LOWER(COALESCE(l.visit_status, '')) LIKE '%yes%'
+            OR LOWER(COALESCE(l.visit_done, '')) = 'yes'
+            OR l.site_visit_at IS NOT NULL
+            OR l.visit_date IS NOT NULL
+        )
+        AND DATE(l.created_at) < DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+    )";
+}
+
+if ($source_filter !== '') {
+    $s_variants = function_exists('getCrmFilterVariants') ? getCrmFilterVariants($source_filter) : [$source_filter];
+    $s_in_sql = implode(',', array_fill(0, count($s_variants), '?'));
+    if (strtoupper($source_filter) === 'OLD DATA') {
+        $query .= " AND (l.source IN ($s_in_sql) OR l.project IN ($s_in_sql) OR l.source LIKE '%OLD%DATA%' OR l.project LIKE '%OLD%DATA%' OR l.source LIKE '%OLD%LEAD%' OR l.project LIKE '%OLD%LEAD%')";
+        $params = array_merge($params, $s_variants, $s_variants);
+    } else {
+        $query .= " AND (l.source IN ($s_in_sql) OR l.source LIKE ?)";
+        $params = array_merge($params, $s_variants, ['%' . $source_filter . '%']);
+    }
+}
+
+if ($campaign_name_filter !== '') {
+    $c_variants = function_exists('getCrmFilterVariants') ? getCrmFilterVariants($campaign_name_filter) : [$campaign_name_filter];
+    $c_in_sql = implode(',', array_fill(0, count($c_variants), '?'));
+    $query .= " AND (
+        c.campaign_name IN ($c_in_sql) 
+        OR l.influencer IN ($c_in_sql) 
+        OR l.meta_campaign_name IN ($c_in_sql)
+        OR c.campaign_name LIKE ?
+        OR l.influencer LIKE ?
+        OR l.meta_campaign_name LIKE ?
+    )";
+    $params = array_merge($params, $c_variants, $c_variants, $c_variants, ['%' . $campaign_name_filter . '%', '%' . $campaign_name_filter . '%', '%' . $campaign_name_filter . '%']);
+}
+
 if ($project_filter !== '') {
-    $query .= " AND l.project = ?";
-    $params[] = $project_filter;
+    $p_variants = function_exists('getCrmFilterVariants') ? getCrmFilterVariants($project_filter) : [$project_filter];
+    $p_in_sql = implode(',', array_fill(0, count($p_variants), '?'));
+    if (strtoupper($project_filter) === 'OLD DATA') {
+        $query .= " AND (l.project IN ($p_in_sql) OR l.source IN ($p_in_sql) OR l.project LIKE '%OLD%DATA%' OR l.project LIKE '%OLD%LEAD%')";
+        $params = array_merge($params, $p_variants, $p_variants);
+    } else {
+        $query .= " AND (l.project IN ($p_in_sql) OR l.project LIKE ?)";
+        $params = array_merge($params, $p_variants, ['%' . $project_filter . '%']);
+    }
 }
 
 if ($campaign_filter > 0) {
@@ -347,9 +530,21 @@ if ($campaign_filter > 0) {
     $params[] = $campaign_filter;
 }
 
-if ($telecaller_filter > 0) {
+if ($telecaller_filter === 'unassigned') {
+    $query .= " AND (l.telecaller_id IS NULL OR l.telecaller_id = 0 OR l.telecaller_id NOT IN (SELECT id FROM users WHERE role = 'telecaller'))";
+} elseif (is_numeric($telecaller_filter) && intval($telecaller_filter) > 0) {
     $query .= " AND l.telecaller_id = ?";
-    $params[] = $telecaller_filter;
+    $params[] = intval($telecaller_filter);
+}
+
+if ($salesperson_filter === 'unassigned') {
+    $query .= " AND (l.salesperson_id IS NULL OR l.salesperson_id = 0) AND (l.sales_manager_id IS NULL OR l.sales_manager_id = 0)";
+} elseif ($salesperson_filter === 'assigned') {
+    $query .= " AND (l.salesperson_id > 0 OR l.sales_manager_id > 0)";
+} elseif (is_numeric($salesperson_filter) && intval($salesperson_filter) > 0) {
+    $query .= " AND (l.salesperson_id = ? OR l.sales_manager_id = ?)";
+    $params[] = intval($salesperson_filter);
+    $params[] = intval($salesperson_filter);
 }
 
 if ($from_date !== '') {
@@ -414,36 +609,72 @@ $stmt = $pdo->prepare($query);
 $stmt->execute($params);
 $leads = $stmt->fetchAll();
 
-// Pre-fetch duplicate phone map for instant repeat inquiry detection
+// Pre-fetch shuffle history for visible leads on this page
+$shuffles_by_lead = [];
+$page_lead_ids = array_column($leads, 'id');
+if (!empty($page_lead_ids)) {
+    $in_lead_sql = implode(',', array_fill(0, count($page_lead_ids), '?'));
+    try {
+        $sh_stmt = $pdo->prepare("
+            SELECT slh.lead_id, slh.from_telecaller_id, slh.to_telecaller_id,
+                   slh.previous_status, slh.previous_remarks, slh.new_status, slh.new_remarks,
+                   u1.name as from_caller_name,
+                   u2.name as to_caller_name
+            FROM shuffled_leads_history slh
+            LEFT JOIN users u1 ON slh.from_telecaller_id = u1.id
+            LEFT JOIN users u2 ON slh.to_telecaller_id = u2.id
+            WHERE slh.lead_id IN ($in_lead_sql)
+              AND slh.from_telecaller_id IS NOT NULL
+              AND slh.to_telecaller_id IS NOT NULL
+              AND slh.from_telecaller_id != slh.to_telecaller_id
+            ORDER BY slh.id ASC
+        ");
+        $sh_stmt->execute($page_lead_ids);
+        while ($sh_r = $sh_stmt->fetch(PDO::FETCH_ASSOC)) {
+            if (!empty($sh_r['from_caller_name']) && !empty($sh_r['to_caller_name']) && (int)$sh_r['from_telecaller_id'] !== (int)$sh_r['to_telecaller_id']) {
+                $shuffles_by_lead[$sh_r['lead_id']] = $sh_r;
+            }
+        }
+    } catch (Throwable $e_sh) {}
+}
+
+// Fast duplicate phone detection (Only for leads displayed on current page)
 $dup_map = [];
-try {
-    $dup_stmt = $pdo->query("
-        SELECT 
-            RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', ''), '(', ''), 10) as clean_phone,
-            COUNT(*) as inq_count,
-            COUNT(DISTINCT telecaller_id) as distinct_tcs
-        FROM leads
-        WHERE phone IS NOT NULL AND phone != '' AND LENGTH(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', ''), '(', '')) >= 10
-        GROUP BY clean_phone
-        HAVING inq_count > 1
-    ");
-    while ($drow = $dup_stmt->fetch(PDO::FETCH_ASSOC)) {
-        $dup_map[$drow['clean_phone']] = [
-            'count' => (int)$drow['inq_count'],
-            'is_cross_tc' => (int)$drow['distinct_tcs'] > 1
-        ];
+$page_phones = [];
+foreach ($leads as $l) {
+    $cp = preg_replace('/[^0-9]/', '', $l['phone'] ?? '');
+    if (strlen($cp) >= 10) {
+        $page_phones[substr($cp, -10)] = true;
     }
-} catch (PDOException $e) {}
+}
+if (!empty($page_phones)) {
+    $phone_list = array_keys($page_phones);
+    $in_ph_sql = implode(',', array_fill(0, count($phone_list), '?'));
+    try {
+        $dup_stmt = $pdo->prepare("
+            SELECT 
+                RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', ''), '(', ''), 10) as clean_phone,
+                COUNT(*) as inq_count,
+                COUNT(DISTINCT telecaller_id) as distinct_tcs
+            FROM leads
+            WHERE RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', ''), '(', ''), 10) IN ($in_ph_sql)
+            GROUP BY clean_phone
+            HAVING inq_count > 1
+        ");
+        $dup_stmt->execute($phone_list);
+        while ($drow = $dup_stmt->fetch(PDO::FETCH_ASSOC)) {
+            $dup_map[$drow['clean_phone']] = [
+                'count' => (int)$drow['inq_count'],
+                'is_cross_tc' => (int)$drow['distinct_tcs'] > 1
+            ];
+        }
+    } catch (PDOException $e) {}
+}
 
 // Fetch all available projects for inline dropdown
-try {
-    $all_projects = $pdo->query("SELECT DISTINCT project FROM leads WHERE project IS NOT NULL AND project != '' UNION SELECT project_name as project FROM project_assignments ORDER BY project ASC")->fetchAll(PDO::FETCH_COLUMN);
-} catch(PDOException $e) {
-    $all_projects = [];
-}
-if (empty($all_projects)) {
-    $all_projects = ['Project A', 'Project B', 'Vayu Green', 'Golden Cryst'];
-}
+$all_projects = getCrmProjectsList($pdo);
+$site_locations = getSiteLocationsList($pdo);
+$budget_list = getBudgetsList($pdo);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -452,10 +683,16 @@ if (empty($all_projects)) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Leads | CRM Leads</title>
     <link rel="icon" type="image/png" href="assets/images/logo-light.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=20260929_status_v3">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?php echo filemtime(__DIR__ . '/assets/css/style.css'); ?>">
 </head>
 <body>
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -518,7 +755,7 @@ if (empty($all_projects)) {
             <?php endif; ?>
 
             <?php if($absent_leads_count > 0): ?>
-                <div class="alert alert-warning shadow-sm border-warning d-flex align-items-center justify-content-between flex-wrap gap-2 mb-4" style="border-radius: 12px;">
+                <div class="alert alert-warning shadow-sm border-warning d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3" style="border-radius: 12px;">
                     <div>
                         <i class="fa-solid fa-triangle-exclamation text-warning fa-lg me-2"></i>
                         <strong>Attention:</strong> There are <strong><?php echo $absent_leads_count; ?></strong> untouched new lead(s) currently assigned to ABSENT telecallers.
@@ -528,6 +765,31 @@ if (empty($all_projects)) {
                     </a>
                 </div>
             <?php endif; ?>
+
+            <?php 
+            $corrupted_codes_count = 0;
+            try {
+                $corrupted_codes_count = (int)$pdo->query("SELECT COUNT(*) FROM leads WHERE lead_code REGEXP '^[A-Za-z]{2,5}[0-9]{6}[0-9]{7,}$'")->fetchColumn();
+            } catch (Throwable $t_corrupt) {}
+            if ($corrupted_codes_count > 0): 
+            ?>
+                <div class="alert alert-danger shadow-sm border-danger d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3" style="border-radius: 12px; background: #fef2f2; border: 1px solid #fecaca;">
+                    <div>
+                        <i class="fa-solid fa-triangle-exclamation text-danger fa-lg me-2"></i>
+                        <strong>Lead Code Notice:</strong> Found <strong><?php echo $corrupted_codes_count; ?></strong> lead(s) where phone number was saved as lead code (e.g. <code>FL181026...</code>).
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <a href="fix_yesterday_lead_codes.php" class="btn btn-outline-danger btn-sm shadow-sm bg-white">
+                            <i class="fa-solid fa-eye me-1"></i>Review Details
+                        </a>
+                        <a href="leads.php?fix_corrupted_codes=1" class="btn btn-danger btn-sm shadow-sm fw-bold" onclick="return confirm('Fix all <?php echo $corrupted_codes_count; ?> corrupted lead codes now? ONLY lead_code will be updated.');">
+                            <i class="fa-solid fa-wrench me-1"></i>Fix Lead Codes Now (<?php echo $corrupted_codes_count; ?>)
+                        </a>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+
 
             <!-- Top Action Toolbar (Above Filters) -->
             <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
@@ -543,17 +805,13 @@ if (empty($all_projects)) {
                 <button type="button" class="btn btn-sm btn-warning shadow-sm text-dark fw-bold px-3 py-2 text-nowrap" data-bs-toggle="modal" data-bs-target="#bulkAssignModal" title="Direct N Leads Transfer">
                     <i class="fa-solid fa-share-nodes me-1"></i>Assign N Leads
                 </button>
-                <a href="leads.php?redistribute_all_present=1" class="btn btn-sm btn-outline-dark shadow-sm fw-semibold px-3 py-2 text-nowrap bg-white text-dark" onclick="return confirm('Redistribute ALL untouched new leads equally among PRESENT telecallers only?');" title="Equal Distribute to Present Telecallers">
-                    <i class="fa-solid fa-users-gear me-1 text-primary"></i>Equal Distribute
+                <a href="leads.php?redistribute_all_present=1" class="btn btn-sm btn-outline-dark shadow-sm fw-semibold px-3 py-2 text-nowrap bg-white text-dark" onclick="return confirm('Distribute TODAY\'s untouched new leads equally among PRESENT telecallers only? (Historical leads will NOT be touched)');" title="Equal Distribute Today's Leads">
+                    <i class="fa-solid fa-users-gear me-1 text-primary"></i>Distribute Today's Leads
                 </a>
                 <a href="leads.php?auto_assign_all_leads=1" class="btn btn-sm btn-outline-dark shadow-sm fw-semibold px-3 py-2 text-nowrap bg-white text-dark" onclick="return confirm('Auto-distribute all leads among their respective project team members?');" title="Distribute All Leads by Project">
                     <i class="fa-solid fa-bolt me-1 text-warning"></i>Distribute by Project
                 </a>
-                <?php if($unassigned_leads_count > 0): ?>
-                <a href="leads.php?redistribute_unassigned=1" class="btn btn-sm btn-danger shadow-sm text-white fw-bold px-3 py-2 text-nowrap" onclick="return confirm('Distribute <?php echo $unassigned_leads_count; ?> unassigned lead(s) equally among present telecallers?');" title="Redistribute Unassigned Leads">
-                    <i class="fa-solid fa-arrows-rotate me-1"></i>Unassigned (<?php echo $unassigned_leads_count; ?>)
-                </a>
-                <?php endif; ?>
+
             </div>
 
             <!-- Filters -->
@@ -571,18 +829,31 @@ if (empty($all_projects)) {
                                 <option value="today" <?php echo $filter_preset == 'today' ? 'selected' : ''; ?>>Today</option>
                                 <option value="yesterday" <?php echo $filter_preset == 'yesterday' ? 'selected' : ''; ?>>Yesterday</option>
                                 <option value="last7" <?php echo $filter_preset == 'last7' ? 'selected' : ''; ?>>Last 7 Days</option>
+                                <option value="transferred_to_admin" <?php echo $filter_preset == 'transferred_to_admin' ? 'selected' : ''; ?>>🚨 Transferred to Admin (30+ Days)</option>
+                                <option value="with_senior_tc" <?php echo $filter_preset == 'with_senior_tc' ? 'selected' : ''; ?>>🎯 With Senior TC Rakesh (30+ Days INT)</option>
                                 <option value="this_month" <?php echo $filter_preset == 'this_month' ? 'selected' : ''; ?>>This Month</option>
                                 <option value="last_month" <?php echo $filter_preset == 'last_month' ? 'selected' : ''; ?>>Last Month</option>
                             </select>
                         </div>
                         <div class="col-xl col-lg-4 col-md-6">
-                            <label class="form-label text-muted fw-semibold small mb-1 text-nowrap">Project</label>
-                            <select name="project" class="form-select">
-                                <option value="">All Projects</option>
+                            <label class="form-label text-muted fw-semibold small mb-1 text-nowrap">Source</label>
+                            <select name="source" class="form-select">
+                                <option value="">All Sources</option>
                                 <?php
-                                $proj_list = $pdo->query("SELECT DISTINCT project FROM leads WHERE project IS NOT NULL AND project != '' ORDER BY project")->fetchAll(PDO::FETCH_COLUMN);
-                                foreach($proj_list as $pl): ?>
-                                    <option value="<?php echo htmlspecialchars($pl); ?>" <?php echo (isset($_GET['project']) && $_GET['project'] == $pl) ? 'selected' : ''; ?>><?php echo htmlspecialchars($pl); ?></option>
+                                $src_list = getCrmSourcesList($pdo);
+                                foreach($src_list as $sl): ?>
+                                    <option value="<?php echo htmlspecialchars($sl); ?>" <?php echo ($source_filter == $sl) ? 'selected' : ''; ?>><?php echo htmlspecialchars($sl); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-xl col-lg-4 col-md-6">
+                            <label class="form-label text-muted fw-semibold small mb-1 text-nowrap">Campaign Name</label>
+                            <select name="campaign_name" class="form-select">
+                                <option value="">All Campaigns</option>
+                                <?php
+                                $cmp_list = getCrmCampaignsList($pdo);
+                                foreach($cmp_list as $cl): ?>
+                                    <option value="<?php echo htmlspecialchars($cl); ?>" <?php echo ($campaign_name_filter == $cl) ? 'selected' : ''; ?>><?php echo htmlspecialchars($cl); ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
@@ -591,10 +862,24 @@ if (empty($all_projects)) {
                             <select name="telecaller_id" class="form-select">
                                 <option value="">All Telecallers</option>
                                 <?php
-                                $tc_list = $pdo->query("SELECT id, name, role FROM users WHERE role IN ('telecaller','sales') ORDER BY name ASC")->fetchAll();
+                                $tc_list = $pdo->query("SELECT id, name FROM users WHERE role = 'telecaller' ORDER BY name ASC")->fetchAll();
                                 foreach($tc_list as $tc_item): ?>
                                     <option value="<?php echo $tc_item['id']; ?>" <?php echo $telecaller_filter == $tc_item['id'] ? 'selected' : ''; ?>>
-                                        <?php echo htmlspecialchars($tc_item['name']) . ' (' . ucfirst($tc_item['role']) . ')'; ?>
+                                        <?php echo htmlspecialchars($tc_item['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="col-xl col-lg-4 col-md-6">
+                            <label class="form-label text-muted fw-semibold small mb-1 text-nowrap">Sales Executive</label>
+                            <select name="salesperson_id" class="form-select">
+                                <option value="">All Sales Persons</option>
+                                <option value="unassigned" <?php echo $salesperson_filter === 'unassigned' ? 'selected' : ''; ?>>⏳ Unassigned (Ready to Forward)</option>
+                                <?php
+                                $sp_filter_list = $pdo->query("SELECT id, name, role FROM users WHERE role IN ('sales', 'sales_manager') ORDER BY name ASC")->fetchAll();
+                                foreach($sp_filter_list as $sp_item): ?>
+                                    <option value="<?php echo $sp_item['id']; ?>" <?php echo $salesperson_filter == $sp_item['id'] ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($sp_item['name']) . ($sp_item['role'] === 'sales_manager' ? ' (Manager)' : ''); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -603,39 +888,15 @@ if (empty($all_projects)) {
                             <label class="form-label text-muted fw-semibold small mb-1 text-nowrap">Status</label>
                             <select name="status" class="form-select">
                                 <option value="">All Statuses</option>
-                                <option value="INT" <?php echo ($status_filter == 'INT' || $status_filter == 'In Progress') ? 'selected' : ''; ?>>INT</option>
-                                <option value="NI" <?php echo ($status_filter == 'NI' || $status_filter == 'Not Interested') ? 'selected' : ''; ?>>NI</option>
-                                <option value="Out of Service" <?php echo ($status_filter == 'Out of Service' || $status_filter == 'OS') ? 'selected' : ''; ?>>Out of Service</option>
-                                <option value="Invalid Number" <?php echo ($status_filter == 'Invalid Number' || $status_filter == 'Wrong Number') ? 'selected' : ''; ?>>Invalid Number</option>
-                                <option value="Incoming Off" <?php echo $status_filter == 'Incoming Off' ? 'selected' : ''; ?>>Incoming Off</option>
-                                <option value="OTH Call Back" <?php echo ($status_filter == 'OTH Call Back' || $status_filter == 'OTH_CALL_BACK') ? 'selected' : ''; ?>>OTH Call Back</option>
-                                <option value="Call Forwarding" <?php echo $status_filter == 'Call Forwarding' ? 'selected' : ''; ?>>Call Forwarding</option>
-                                <option value="Call Disconnect" <?php echo ($status_filter == 'Call Disconnect' || $status_filter == 'Call Disconnected') ? 'selected' : ''; ?>>Call Disconnect</option>
-                                <option value="OS" <?php echo $status_filter == 'OS' ? 'selected' : ''; ?>>OS</option>
-                                <option value="OTH" <?php echo $status_filter == 'OTH' ? 'selected' : ''; ?>>OTH</option>
-                                <option value="OTH_NOT_PICK" <?php echo ($status_filter == 'OTH_NOT_PICK' || $status_filter == 'RNR (No Response)') ? 'selected' : ''; ?>>OTH_NOT_PICK</option>
-                                <option value="OTH_BUSY" <?php echo ($status_filter == 'OTH_BUSY' || $status_filter == 'Busy / Callback') ? 'selected' : ''; ?>>OTH_BUSY</option>
-                                <option value="OTH_SWITCH_OFF" <?php echo ($status_filter == 'OTH_SWITCH_OFF' || $status_filter == 'Switched Off') ? 'selected' : ''; ?>>OTH_SWITCH_OFF</option>
-                                <option value="OTH_NETWORK" <?php echo $status_filter == 'OTH_NETWORK' ? 'selected' : ''; ?>>OTH_NETWORK</option>
-                                <option value="New" <?php echo $status_filter == 'New' ? 'selected' : ''; ?>>New</option>
-                                <option value="Follow Up" <?php echo $status_filter == 'Follow Up' ? 'selected' : ''; ?>>Follow Up</option>
-                                <option value="In Progress" <?php echo $status_filter == 'In Progress' ? 'selected' : ''; ?>>In Progress</option>
-                                <option value="Not Interested" <?php echo $status_filter == 'Not Interested' ? 'selected' : ''; ?>>Not Interested</option>
-                                <option value="RNR (No Response)" <?php echo $status_filter == 'RNR (No Response)' ? 'selected' : ''; ?>>RNR (No Response)</option>
-                                <option value="Busy / Callback" <?php echo $status_filter == 'Busy / Callback' ? 'selected' : ''; ?>>Busy / Callback</option>
-                                <option value="Switched Off" <?php echo $status_filter == 'Switched Off' ? 'selected' : ''; ?>>Switched Off</option>
-                                <option value="Wrong Number" <?php echo $status_filter == 'Wrong Number' ? 'selected' : ''; ?>>Wrong Number</option>
-                                <option value="Budget Issue" <?php echo $status_filter == 'Budget Issue' ? 'selected' : ''; ?>>Budget Issue</option>
-                                <option value="Location Mismatch" <?php echo $status_filter == 'Location Mismatch' ? 'selected' : ''; ?>>Location Mismatch</option>
-                                <option value="Site Visit Scheduled" <?php echo $status_filter == 'Site Visit Scheduled' ? 'selected' : ''; ?>>Site Visit Scheduled</option>
-                                <option value="Site Visit Done" <?php echo $status_filter == 'Site Visit Done' ? 'selected' : ''; ?>>Site Visit Done</option>
-                                <option value="Re-Visit Scheduled" <?php echo $status_filter == 'Re-Visit Scheduled' ? 'selected' : ''; ?>>Re-Visit Scheduled</option>
-                                <option value="Negotiation" <?php echo $status_filter == 'Negotiation' ? 'selected' : ''; ?>>Negotiation</option>
-                                <option value="Assigned to Sales" <?php echo ($status_filter == 'Assigned to Sales' || $status_filter == 'Forward to Sales') ? 'selected' : ''; ?>>Assigned to Sales</option>
-                                <option value="Booked / Token Paid" <?php echo ($status_filter == 'Booked / Token Paid' || $status_filter == 'Booked / Token') ? 'selected' : ''; ?>>Booked / Token Paid</option>
-                                <option value="Converted" <?php echo $status_filter == 'Converted' ? 'selected' : ''; ?>>Converted</option>
-                                <option value="Dead" <?php echo $status_filter == 'Dead' ? 'selected' : ''; ?>>Dead</option>
-                                <option value="DND" <?php echo $status_filter == 'DND' ? 'selected' : ''; ?>>DND</option>
+                                <option value="site_visit_done" <?php echo ($site_visit_param === 'completed' || $status_filter === 'site_visit_done') ? 'selected' : ''; ?>>✅ Site Visits (Completed / Done)</option>
+                                <option value="site_visit_sched" <?php echo ($site_visit_param === 'scheduled' || $status_filter === 'site_visit_sched') ? 'selected' : ''; ?>>📅 Site Visits (Scheduled / Planned)</option>
+                                <option value="site_visit" <?php echo (($site_visit_param === 'all' || $status_filter === 'site_visit') && $site_visit_param !== 'completed' && $site_visit_param !== 'scheduled') ? 'selected' : ''; ?>>🚗 All Site Visits (Done & Scheduled)</option>
+                                <option value="transferred_to_admin" <?php echo ($status_filter === 'transferred_to_admin') ? 'selected' : ''; ?>>🚨 Transferred to Admin (30+ Days)</option>
+                                <?php foreach (getStrictLeadStatuses() as $st_code => $st_data): ?>
+                                    <option value="<?php echo $st_code; ?>" <?php echo ($status_filter === $st_code && !$site_visit_filter) ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($st_code); ?>
+                                    </option>
+                                <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-xl-3 col-lg-4 col-md-6">
@@ -655,10 +916,13 @@ if (empty($all_projects)) {
                                 <?php 
                                     $export_params = http_build_query([
                                         'search'        => $search,
+                                        'source'        => $source_filter,
+                                        'campaign_name' => $campaign_name_filter,
                                         'project'       => $project_filter,
                                         'telecaller_id' => $telecaller_filter,
                                         'status'        => $status_filter,
                                         'filter'        => $filter_preset,
+                                        'site_visit'    => $site_visit_param,
                                         'from_date'     => $from_date,
                                         'to_date'       => $to_date
                                     ]);
@@ -671,6 +935,45 @@ if (empty($all_projects)) {
                     </form>
                 </div>
             </div>
+
+            <?php if ($site_visit_filter || in_array($filter_preset, ['int', 'followup', 'converted', 'transferred_to_admin', 'with_senior_tc'])): 
+                if ($site_visit_filter) {
+                    if ($site_visit_param === 'completed' || $site_visit_param === 'done') {
+                        $filter_title = '✅ Completed Site Visits (Done)';
+                        $badge_class = 'bg-success text-white';
+                    } elseif ($site_visit_param === 'scheduled' || $site_visit_param === 'sched') {
+                        $filter_title = '📅 Scheduled Site Visits (Upcoming / Planned)';
+                        $badge_class = 'bg-info text-dark';
+                    } else {
+                        $filter_title = '🚗 All Site Visits (Done & Scheduled)';
+                        $badge_class = 'bg-primary text-white';
+                    }
+                } else {
+                    $filter_title = ($filter_preset === 'int' ? '⭐ Interested (INT)' : ($filter_preset === 'followup' ? '📞 Follow-Ups' : ($filter_preset === 'converted' ? '🏆 Converted / Booked' : ($filter_preset === 'with_senior_tc' ? '🎯 With Senior TC Rakesh' : '🚨 Transferred to Admin'))));
+                    $badge_class = 'bg-primary text-white';
+                }
+                $tc_name_display = '';
+                if (!empty($telecaller_filter) && is_numeric($telecaller_filter)) {
+                    foreach ($tc_list as $tc_i) {
+                        if ((int)$tc_i['id'] === (int)$telecaller_filter) {
+                            $tc_name_display = $tc_i['name'];
+                            break;
+                        }
+                    }
+                }
+            ?>
+                <div class="alert alert-info py-2 px-3 mb-3 d-flex align-items-center justify-content-between flex-wrap gap-2 rounded-3 shadow-sm border" style="background: #eff6ff; border-color: #bfdbfe !important;">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge <?php echo $badge_class; ?> px-2 py-1"><?php echo $filter_title; ?></span>
+                        <span class="text-dark small fw-semibold">
+                            Showing <strong><?php echo $total_leads; ?></strong> lead(s) <?php if ($tc_name_display): ?>for Telecaller: <span class="badge bg-dark text-white px-2 py-1"><?php echo htmlspecialchars($tc_name_display); ?></span><?php endif; ?>
+                        </span>
+                    </div>
+                    <a href="leads.php" class="btn btn-sm btn-outline-secondary bg-white py-1 px-3 shadow-sm" style="font-size: 12px;">
+                        <i class="fa-solid fa-xmark me-1"></i>Clear Filter
+                    </a>
+                </div>
+            <?php endif; ?>
 
             <div class="table-card shadow-sm border-0 mb-4" style="border-radius: 12px;">
                 <div class="table-header d-flex justify-content-between align-items-center p-3 bg-white border-bottom flex-wrap gap-2">
@@ -697,6 +1000,7 @@ if (empty($all_projects)) {
                         <div class="d-flex align-items-center gap-2">
                             <label class="small text-muted fw-semibold me-1 mb-0 text-nowrap"><i class="fa-solid fa-layer-group me-1"></i>Per page:</label>
                             <select class="form-select form-select-sm" style="width: auto; font-weight: 600;" onchange="location.href=this.value;">
+                                <option value="<?php echo getAllLeadsPageUrl(1, 5); ?>" <?php echo $per_page_param === '5' ? 'selected' : ''; ?>>5 leads</option>
                                 <option value="<?php echo getAllLeadsPageUrl(1, 10); ?>" <?php echo $per_page_param === '10' ? 'selected' : ''; ?>>10 leads</option>
                                 <option value="<?php echo getAllLeadsPageUrl(1, 25); ?>" <?php echo $per_page_param === '25' ? 'selected' : ''; ?>>25 leads (Default)</option>
                                 <option value="<?php echo getAllLeadsPageUrl(1, 50); ?>" <?php echo $per_page_param === '50' ? 'selected' : ''; ?>>50 leads</option>
@@ -716,29 +1020,58 @@ if (empty($all_projects)) {
                                 </th>
                                 <th style="width: 50px; text-align: center;" class="text-nowrap">SN</th>
                                 <th style="min-width: 95px;">DATE</th>
-                                <th style="min-width: 130px;">LEADS</th>
+                                <th style="min-width: 140px;">SOURCE</th>
                                 <th style="min-width: 140px;">LEAD CODE</th>
-                                <th style="min-width: 110px;">CAMPAIGN NO</th>
-                                <th style="min-width: 130px;">CAMPAIGN NAME</th>
+                                <th style="min-width: 140px;">CAMPAIGN NAME</th>
                                 <th style="min-width: 110px;">CITY</th>
                                 <th style="min-width: 180px;">NAME</th>
                                 <th style="min-width: 130px;">CONTACT</th>
                                 <th style="min-width: 140px;">TELECALLER</th>
-                                <th style="min-width: 155px;">STATUS-1</th>
+                                <th style="min-width: 155px;">
+                                    STATUS-1
+                                    <button type="button" class="btn btn-xs btn-outline-light ms-1 px-1.5 py-0.5 border-opacity-50 btn-open-os-modal-direct" title="Manage Dynamic OS Sites" style="font-size: 10px; border-radius: 4px; line-height: 1.2; vertical-align: middle;">
+                                        <i class="fa-solid fa-map-pin me-0.5"></i>OS Sites
+                                    </button>
+                                </th>
                                 <th style="min-width: 280px;" class="bg-maroon-subtle">REMARK 1</th>
-                                <th style="min-width: 140px;">SITE LOCATION</th>
+                                <th style="min-width: 145px; background-color: rgba(22, 163, 74, 0.08);"><i class="fa-solid fa-user-check text-success me-1"></i>TC-2 NAME</th>
+                                <th style="min-width: 145px; background-color: rgba(22, 163, 74, 0.08);"><i class="fa-solid fa-tag text-success me-1"></i>TC-2 STATUS</th>
+                                <th style="min-width: 260px; background-color: rgba(22, 163, 74, 0.08);"><i class="fa-solid fa-comment-dots text-success me-1"></i>TC-2 REMARK</th>
+                                <th style="min-width: 150px;" class="text-nowrap">
+                                    SITE LOCATION
+                                    <button type="button" class="btn btn-xs btn-outline-light ms-1 px-1.5 py-0.5 border-opacity-50 btn-open-site-locations-modal" title="Add / Manage Site Locations" style="font-size: 10px; border-radius: 4px; line-height: 1.2; vertical-align: middle;">
+                                        <i class="fa-solid fa-plus me-0.5"></i>Add
+                                    </button>
+                                </th>
+                                <th style="min-width: 145px;" class="text-nowrap">
+                                    BUDGET
+                                    <?php if (isAdmin() || isSalesManager()): ?>
+                                    <button type="button" class="btn btn-xs btn-outline-light ms-1 px-1.5 py-0.5 border-opacity-50 btn-open-budgets-modal" title="Add / Manage Budget Ranges" style="font-size: 10px; border-radius: 4px; line-height: 1.2; vertical-align: middle;">
+                                        <i class="fa-solid fa-plus me-0.5"></i>Add
+                                    </button>
+                                    <?php endif; ?>
+                                </th>
+                                <th style="min-width: 150px;">UPCOMING_FOLLOW-UP</th>
                                 <th style="min-width: 150px;">FOLLOWUP 1</th>
                                 <th style="min-width: 280px;">REMARK 2</th>
                                 <th style="min-width: 150px;">FOLLOWUP 2</th>
                                 <th style="min-width: 280px;">REMARK-3</th>
                                 <th style="min-width: 75px;">DAYS</th>
-                                <th style="min-width: 95px;">VISIT</th>
-                                <th style="min-width: 150px;">DATE</th>
+                                <th style="min-width: 150px;">VISIT(EXPECTED VISIT DATE)</th>
+                                <th style="min-width: 150px;">VISIT DATE</th>
                                 <th style="min-width: 105px;">VISIT DONE</th>
-                                <th style="min-width: 260px;">REMARK</th>
-                                <th style="min-width: 130px;">DATE</th>
-                                <th style="min-width: 140px;">NAME ON</th>
-                                <th style="min-width: 110px;">NUMBER</th>
+                                <th style="min-width: 140px;">TEAM_HEAD</th>
+                                <th style="min-width: 140px;">MANAGER _NAME</th>
+                                <th style="min-width: 140px;">VISIT_DONE_BY</th>
+                                <th style="min-width: 260px;">VISIT REMARK</th>
+                                <th style="min-width: 130px;">HAPPY_CALLING_DATE</th>
+                                <th style="min-width: 140px;">HAPPY_CALLING_STATUS</th>
+                                <th style="min-width: 260px;">HAPPY_CALLING_REMARK</th>
+                                <th style="min-width: 130px;">BOOKING DATE</th>
+                                <th style="min-width: 160px;">NAME ON BOOKING FORM</th>
+                                <th style="min-width: 150px;">FINAL_STATUS(MANAGER)</th>
+                                <th style="min-width: 130px;">FINAL_STATUS_DATE(MANAGER)</th>
+                                <th style="min-width: 110px;">UNIT NUMBER</th>
                                 <th style="min-width: 100px;">AREA</th>
                                 <th style="min-width: 130px;">REG DATE</th>
                                 <th style="min-width: 125px;">REG STATUS</th>
@@ -747,23 +1080,53 @@ if (empty($all_projects)) {
                         </thead>
                         <tbody>
                             <?php 
-                            $all_tcs = $pdo->query("SELECT id, name FROM users WHERE role IN ('telecaller','sales') ORDER BY name ASC")->fetchAll();
+                            $all_tcs = $pdo->query("SELECT id, name FROM users WHERE role = 'telecaller' ORDER BY name ASC")->fetchAll();
                             $row_sn = ($per_page > 0) ? (($page - 1) * $per_page + 1) : 1;
                             foreach($leads as $lead): 
                                 $days_elapsed = max(0, (int)floor((time() - strtotime($lead['created_at'])) / 86400));
                                 $clean_phone = preg_replace('/[^0-9]/', '', $lead['phone']);
                                 $wa_phone = (strlen($clean_phone) == 10) ? '91' . $clean_phone : $clean_phone;
                                 
-                                $fu1_val = !empty($lead['followup_1']) ? date('Y-m-d\TH:i', strtotime($lead['followup_1'])) : (!empty($lead['follow_up_at']) ? date('Y-m-d\TH:i', strtotime($lead['follow_up_at'])) : '');
+                                $upfu_val = !empty($lead['upcoming_follow_up']) ? date('Y-m-d\TH:i', strtotime($lead['upcoming_follow_up'])) : (!empty($lead['follow_up_at']) ? date('Y-m-d\TH:i', strtotime($lead['follow_up_at'])) : (!empty($lead['followup_date']) ? date('Y-m-d\TH:i', strtotime($lead['followup_date'])) : ''));
+                                $fu1_val = !empty($lead['followup_1']) ? date('Y-m-d\TH:i', strtotime($lead['followup_1'])) : '';
                                 $fu2_val = !empty($lead['followup_2']) ? date('Y-m-d\TH:i', strtotime($lead['followup_2'])) : '';
                                 $vdate_val = !empty($lead['visit_date']) ? date('Y-m-d\TH:i', strtotime($lead['visit_date'])) : (!empty($lead['site_visit_at']) ? date('Y-m-d\TH:i', strtotime($lead['site_visit_at'])) : '');
                                 $bdate_val = !empty($lead['booking_date']) ? date('Y-m-d', strtotime($lead['booking_date'])) : '';
+                                $hcdate_val = !empty($lead['happy_calling_date']) ? date('Y-m-d', strtotime($lead['happy_calling_date'])) : '';
+                                $fsdate_val = !empty($lead['final_status_date_manager']) ? date('Y-m-d', strtotime($lead['final_status_date_manager'])) : '';
                                 $regdate_val = !empty($lead['registry_date']) ? date('Y-m-d', strtotime($lead['registry_date'])) : '';
+                                $exp_vdate_val = '';
+                                if (!empty($lead['visit_status']) && strtolower(trim($lead['visit_status'])) !== 'no') {
+                                    $ts_exp = strtotime($lead['visit_status']);
+                                    if ($ts_exp && $ts_exp > 0) {
+                                        $exp_vdate_val = date('Y-m-d', $ts_exp);
+                                    }
+                                }
+
+                                $st_clean = strtoupper(trim($lead['status'] ?? ''));
+                                $is_lead_protected = (
+                                    in_array($st_clean, ['INT', 'INT_VISIT_DONE'])
+                                    || strpos($st_clean, 'INT') !== false
+                                    || (!empty($lead['visit_status']) && in_array(strtolower(trim($lead['visit_status'])), ['yes', 'scheduled']))
+                                    || (!empty($lead['visit_done']) && in_array(strtolower(trim($lead['visit_done'])), ['yes', '1']))
+                                    || (!empty($lead['visit_date']) && strtotime($lead['visit_date']) >= strtotime(date('Y-m-d')))
+                                    || (!empty($lead['site_visit_at']) && strtotime($lead['site_visit_at']) >= strtotime(date('Y-m-d')))
+                                    || (!empty($lead['followup_date']) && strtotime($lead['followup_date']) >= strtotime(date('Y-m-d')))
+                                    || (!empty($lead['follow_up_at']) && strtotime($lead['follow_up_at']) >= strtotime(date('Y-m-d')))
+                                    || (!empty($lead['followup_1']) && strtotime($lead['followup_1']) >= strtotime(date('Y-m-d')))
+                                    || (!empty($lead['followup_2']) && strtotime($lead['followup_2']) >= strtotime(date('Y-m-d')))
+                                );
                             ?>
                             <tr>
                                 <!-- Checkbox Column for Bulk Selection / Shuffle -->
                                 <td class="text-center align-middle" style="width: 40px;">
-                                    <input type="checkbox" name="selected_lead_rows[]" value="<?php echo $lead['id']; ?>" class="form-check-input lead-row-cb" style="cursor: pointer; width: 17px; height: 17px;">
+                                    <?php if ($is_lead_protected): ?>
+                                        <span class="d-inline-flex align-items-center justify-content-center text-danger" title="Protected Lead (<?php echo htmlspecialchars($lead['status'] ?? 'Protected'); ?>) — Cannot be shuffled" style="cursor: not-allowed; width: 17px; height: 17px;">
+                                            <i class="fa-solid fa-lock" style="font-size: 12px; opacity: 0.85;"></i>
+                                        </span>
+                                    <?php else: ?>
+                                        <input type="checkbox" name="selected_lead_rows[]" value="<?php echo $lead['id']; ?>" class="form-check-input lead-row-cb" style="cursor: pointer; width: 17px; height: 17px;">
+                                    <?php endif; ?>
                                 </td>
 
                                 <!-- SN: Row Serial Number -->
@@ -776,37 +1139,31 @@ if (empty($all_projects)) {
                                     <span class="text-dark fw-semibold" style="font-size: 11.5px;"><?php echo date('d-m-Y', strtotime($lead['created_at'])); ?></span>
                                 </td>
 
-                                <!-- 2. LEADS -->
+                                <!-- 2. SOURCE -->
                                 <td>
-                                    <div class="fw-semibold text-dark text-nowrap" style="font-size: 11.5px; line-height: 1.2;">
-                                        <i class="fa-solid fa-building text-primary me-1" style="font-size: 10px;"></i><?php echo htmlspecialchars(getLeadProject($lead)); ?>
-                                    </div>
-                                    <div class="d-flex align-items-center gap-1 mt-1 flex-wrap">
-                                        <?php echo renderLeadTypeBadge($lead['lead_type'] ?? null, $lead['source']); ?>
-                                        <?php echo renderSourceBadge($lead['source']); ?>
-                                        <?php if (!empty($lead['campaign_name'])): ?>
+                                    <input type="text" list="sourceSuggestions" class="excel-cell-input fw-semibold" data-lead-id="<?php echo $lead['id']; ?>" data-field="source" value="<?php echo htmlspecialchars($lead['source'] ?? ''); ?>" placeholder="Source (e.g. IndiaMART)">
+                                    <?php if (!empty($lead['campaign_name'])): ?>
+                                        <div class="mt-1">
                                             <a href="campaigns.php?search=<?php echo urlencode($lead['campaign_name']); ?>" class="badge bg-light text-muted border text-decoration-none" style="font-size: 9px; padding: 1.5px 5px; font-weight: 500; border-radius: 3px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1;" title="Ad Campaign: <?php echo htmlspecialchars($lead['campaign_name']); ?>">
                                                 <i class="fa-brands fa-meta text-primary me-1" style="font-size: 8px;"></i><?php echo htmlspecialchars(mb_strimwidth($lead['campaign_name'], 0, 16, '...')); ?>
                                             </a>
-                                        <?php endif; ?>
-                                    </div>
+                                        </div>
+                                    <?php endif; ?>
                                 </td>
 
-                                <!-- 3. LEAD CODE -->
+                                <!-- 4. LEAD CODE -->
                                 <td class="text-nowrap">
                                     <span class="badge bg-light text-primary border font-monospace px-2 py-1" style="font-size: 11px; font-weight: 700; letter-spacing: 0.5px;">
                                         <?php echo htmlspecialchars(getLeadCode($lead)); ?>
                                     </span>
                                 </td>
 
-                                <!-- 4. SERIAL NO -->
+                                <!-- 4. CAMPAIGN NAME -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="campaign_number" value="<?php echo htmlspecialchars($lead['campaign_number'] ?? ''); ?>" placeholder="Serial No">
-                                </td>
-
-                                <!-- 5. CAMPAIGN NAME -->
-                                <td>
-                                    <input type="text" list="influencerSuggestions" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="influencer" value="<?php echo htmlspecialchars($lead['influencer'] ?? ''); ?>" placeholder="Campaign Name">
+                                    <?php 
+                                    $disp_camp = !empty($lead['influencer']) ? $lead['influencer'] : (!empty($lead['meta_campaign_name']) ? $lead['meta_campaign_name'] : ($lead['campaign_name'] ?? ''));
+                                    ?>
+                                    <input type="text" list="influencerSuggestions" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="influencer" value="<?php echo htmlspecialchars($disp_camp); ?>" placeholder="Campaign Name">
                                 </td>
 
                                 <!-- 6. CITY -->
@@ -828,7 +1185,7 @@ if (empty($all_projects)) {
                                                 <button type="button" class="btn btn-xs btn-light border btn-cancel-name px-1 py-0" title="Cancel"><i class="fa-solid fa-xmark" style="font-size: 10px;"></i></button>
                                             </div>
                                         </div>
-                                        <?php if(isset($dup_map[$clean_phone])): 
+                                        <?php if((getUser()['role'] ?? '') === 'admin' && isset($dup_map[$clean_phone])): 
                                             $d_info = $dup_map[$clean_phone];
                                         ?>
                                             <?php if($d_info['is_cross_tc']): ?>
@@ -856,6 +1213,29 @@ if (empty($all_projects)) {
                                         </a>
                                         <?php endif; ?>
                                     </div>
+                                    <?php if(!empty($lead['sales_manager_id']) || !empty($lead['salesperson_id']) || !empty($lead['sales_branch_title'])): ?>
+                                    <div class="mt-1 d-flex flex-wrap gap-1 align-items-center" style="font-size: 10px;">
+                                        <?php if(!empty($lead['sales_branch_title'])): ?>
+                                            <span class="badge bg-light text-dark border" title="Branch Location">
+                                                <i class="fa-solid fa-building text-primary me-1"></i><?php echo htmlspecialchars($lead['sales_branch_title']); ?>
+                                            </span>
+                                        <?php endif; ?>
+                                        <?php if(!empty($lead['sales_manager_name'])): ?>
+                                            <span class="badge bg-primary-subtle text-primary border border-primary" title="Assigned Branch Head / Sales Manager">
+                                                <i class="fa-solid fa-user-tie me-1"></i>Head: <?php echo htmlspecialchars($lead['sales_manager_name']); ?>
+                                            </span>
+                                        <?php endif; ?>
+                                        <?php if(!empty($lead['sales_name'])): ?>
+                                            <span class="badge bg-success-subtle text-success border border-success fw-bold" title="Field Sales Person Handling Visit / Closing">
+                                                <i class="fa-solid fa-person-walking me-1"></i>Exec: <?php echo htmlspecialchars($lead['sales_name']); ?>
+                                            </span>
+                                        <?php elseif(!empty($lead['sales_manager_id'])): ?>
+                                            <span class="badge bg-warning-subtle text-dark border border-warning" title="With Branch Head: Pending delegation to team executive">
+                                                <i class="fa-solid fa-hourglass-half me-1"></i>Pending Delegation
+                                            </span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <?php endif; ?>
                                 </td>
 
                                 <!-- 8. CONTACT -->
@@ -863,52 +1243,178 @@ if (empty($all_projects)) {
                                     <?php echo htmlspecialchars($lead['phone']); ?>
                                 </td>
 
-                                <!-- 9. TELECALLER -->
+                                <?php
+                                $norm_lead_st = normalizeLeadStatus($lead['status'] ?? '');
+                                $is_int_lead = (
+                                    in_array($norm_lead_st, ['INT', 'INT_VISIT_DONE']) ||
+                                    strtoupper(trim($lead['status'] ?? '')) === 'INT' ||
+                                    strtoupper(trim($lead['status'] ?? '')) === 'INT_VISIT_DONE' ||
+                                    stripos(trim($lead['status'] ?? ''), 'INT') !== false ||
+                                    stripos(trim($lead['status'] ?? ''), 'Interested') !== false
+                                );
+
+                                // TC-2 exists if lead was legitimately shuffled to a DIFFERENT telecaller
+                                $has_tc2 = false;
+                                $tc2_info = null;
+                                if (isset($shuffles_by_lead[$lead['id']])) {
+                                    $cand_sh = $shuffles_by_lead[$lead['id']];
+                                    if (!empty($cand_sh['from_telecaller_id']) && !empty($cand_sh['to_telecaller_id']) && (int)$cand_sh['from_telecaller_id'] !== (int)$cand_sh['to_telecaller_id'] && !empty($cand_sh['to_caller_name'])) {
+                                        $has_tc2 = true;
+                                        $tc2_info = $cand_sh;
+                                    }
+                                }
+                                ?>
+
+                                <!-- 9. TELECALLER (TC-1) -->
                                 <td>
-                                    <select class="excel-cell-select" data-lead-id="<?php echo $lead['id']; ?>" data-field="telecaller_id" title="Reassign Telecaller">
-                                        <option value="">Unassigned</option>
-                                        <?php foreach($all_tcs as $tc_u): ?>
-                                            <option value="<?php echo $tc_u['id']; ?>" <?php echo ($lead['telecaller_id'] == $tc_u['id']) ? 'selected' : ''; ?>>
-                                                <?php echo htmlspecialchars($tc_u['name']); ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
+                                    <?php if ($has_tc2): ?>
+                                        <div class="d-flex flex-column gap-0.5">
+                                            <div class="fw-bold text-dark" style="font-size: 13px;" title="Original Telecaller 1">
+                                                <i class="fa-solid fa-user me-1 text-secondary"></i><?php echo htmlspecialchars($tc2_info['from_caller_name']); ?>
+                                            </div>
+                                            <span class="badge bg-light text-muted border align-self-start" style="font-size: 9px; padding: 1.5px 5px;">TC-1 (Original)</span>
+                                            <div class="d-flex align-items-center mt-0.5">
+                                                <?php echo getLeadValidityBadgeHtml($lead); ?>
+                                            </div>
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="d-flex flex-column gap-1">
+                                            <select class="excel-cell-select" data-lead-id="<?php echo $lead['id']; ?>" data-field="telecaller_id" title="Reassign Telecaller">
+                                                <option value="">Unassigned</option>
+                                                <?php foreach($all_tcs as $tc_u): ?>
+                                                    <option value="<?php echo $tc_u['id']; ?>" <?php echo ($lead['telecaller_id'] == $tc_u['id']) ? 'selected' : ''; ?>>
+                                                        <?php echo htmlspecialchars($tc_u['name']); ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                            <div class="d-flex align-items-center">
+                                                <?php echo getLeadValidityBadgeHtml($lead); ?>
+                                            </div>
+                                        </div>
+                                    <?php endif; ?>
                                 </td>
 
-                                <!-- 10. STATUS-1 (Dropdown 1/4) -->
+                                <!-- 10. STATUS-1 -->
                                 <td>
-                                    <select class="table-inline-status" data-lead-id="<?php echo $lead['id']; ?>" data-field="status" data-current-status="<?php echo htmlspecialchars($lead['status']); ?>" style="background-color: <?php echo getLeadStatusColor($lead['status']); ?> !important; color: #ffffff !important; font-weight: 700 !important; border-color: <?php echo getLeadStatusColor($lead['status']); ?> !important;">
-                                        <option value="INT" style="background-color:#16a34a !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'INT' || $lead['status'] === 'Interested' || $lead['status'] === 'In Progress') ? 'selected' : ''; ?>>🟢 INT</option>
-                                        <option value="NI" style="background-color:#dc2626 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'NI' || $lead['status'] === 'Not Interested') ? 'selected' : ''; ?>>🔴 NI</option>
-                                        <option value="Out of Service" style="background-color:#475569 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Out of Service' || $lead['status'] === 'OS') ? 'selected' : ''; ?>>⚪ Out of Service</option>
-                                        <option value="Invalid Number" style="background-color:#9f1239 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Invalid Number' || $lead['status'] === 'Wrong Number') ? 'selected' : ''; ?>>❌ Invalid Number</option>
-                                        <option value="Incoming Off" style="background-color:#78716c !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Incoming Off') ? 'selected' : ''; ?>>📵 Incoming Off</option>
-                                        <option value="OTH Call Back" style="background-color:#ea580c !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'OTH Call Back' || $lead['status'] === 'OTH_CALL_BACK') ? 'selected' : ''; ?>>🟠 OTH Call Back</option>
-                                        <option value="Call Forwarding" style="background-color:#0891b2 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Call Forwarding') ? 'selected' : ''; ?>>📞 Call Forwarding</option>
-                                        <option value="Call Disconnect" style="background-color:#e11d48 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Call Disconnect' || $lead['status'] === 'Call Disconnected') ? 'selected' : ''; ?>>📴 Call Disconnect</option>
-                                        <option value="OS" style="background-color:#475569 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'OS' ? 'selected' : ''; ?>>🔘 OS</option>
-                                        <option value="OTH" style="background-color:#6b7280 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'OTH' ? 'selected' : ''; ?>>◽ OTH</option>
-                                        <option value="OTH_NOT_PICK" style="background-color:#7c3aed !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'OTH_NOT_PICK' || $lead['status'] === 'RNR (No Response)') ? 'selected' : ''; ?>>🟣 OTH_NOT_PICK</option>
-                                        <option value="OTH_BUSY" style="background-color:#4f46e5 !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'OTH_BUSY' || $lead['status'] === 'Busy / Callback') ? 'selected' : ''; ?>>🔷 OTH_BUSY</option>
-                                        <option value="OTH_SWITCH_OFF" style="background-color:#64748b !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'OTH_SWITCH_OFF' || $lead['status'] === 'Switched Off') ? 'selected' : ''; ?>>⚫ OTH_SWITCH_OFF</option>
-                                        <option value="OTH_NETWORK" style="background-color:#0d9488 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'OTH_NETWORK' ? 'selected' : ''; ?>>📶 OTH_NETWORK</option>
-                                        <option value="New" style="background-color:#0284c7 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'New' ? 'selected' : ''; ?>>🔵 New</option>
-                                        <option value="Follow Up" style="background-color:#d97706 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Follow Up' ? 'selected' : ''; ?>>🟡 Follow Up</option>
-                                        <option value="Site Visit Scheduled" style="background-color:#9333ea !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Site Visit Scheduled' ? 'selected' : ''; ?>>📍 Site Visit Sched.</option>
-                                        <option value="Site Visit Done" style="background-color:#059669 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Site Visit Done' ? 'selected' : ''; ?>>✅ Site Visit Done</option>
-                                        <option value="Re-Visit Scheduled" style="background-color:#a855f7 !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Re-Visit Scheduled' ? 'selected' : ''; ?>>🔄 Re-Visit Sched.</option>
-                                        <option value="Negotiation" style="background-color:#c2410c !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Negotiation' ? 'selected' : ''; ?>>🤝 Negotiation</option>
-                                        <option value="Assigned to Sales" style="background-color:#2563eb !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Assigned to Sales' || $lead['status'] === 'Forward to Sales') ? 'selected' : ''; ?>>💼 Forward to Sales</option>
-                                        <option value="Booked / Token Paid" style="background-color:#15803d !important; color:#ffffff !important; font-weight:700;" <?php echo ($lead['status'] === 'Booked / Token Paid' || $lead['status'] === 'Booked / Token') ? 'selected' : ''; ?>>💰 Booked / Token</option>
-                                        <option value="Converted" style="background-color:#14532d !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Converted' ? 'selected' : ''; ?>>🏆 Converted</option>
-                                        <option value="Dead" style="background-color:#1e293b !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'Dead' ? 'selected' : ''; ?>>☠️ Dead</option>
-                                        <option value="DND" style="background-color:#0f172a !important; color:#ffffff !important; font-weight:700;" <?php echo $lead['status'] === 'DND' ? 'selected' : ''; ?>>⛔ DND</option>
-                                    </select>
+                                    <?php if ($has_tc2): 
+                                        $tc1_st = normalizeLeadStatus($tc2_info['previous_status'] ?? 'OTH');
+                                        $tc1_col = getLeadStatusColor($tc1_st);
+                                    ?>
+                                        <span class="badge px-2.5 py-1 text-white font-monospace" style="background-color: <?php echo $tc1_col; ?> !important; font-size: 11px; font-weight: 700; border: 1px solid <?php echo $tc1_col; ?>;" title="Telecaller 1 Status">
+                                            <?php echo htmlspecialchars($tc1_st); ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <?php
+                                        $strict_statuses = getStrictLeadStatuses();
+                                        $raw_st = trim((string)($lead['status'] ?? ''));
+                                        $curr_st = normalizeLeadStatus($raw_st);
+                                        ?>
+                                        <select class="table-inline-status" data-lead-id="<?php echo $lead['id']; ?>" data-field="status" data-current-status="<?php echo htmlspecialchars($curr_st); ?>" style="<?php echo ($curr_st !== '') ? 'background-color: ' . getLeadStatusColor($curr_st) . ' !important; color: #ffffff !important; font-weight: 700 !important; border-color: ' . getLeadStatusColor($curr_st) . ' !important;' : 'background-color: #f8fafc !important; color: #64748b !important; font-weight: 600 !important; border: 1.5px dashed #cbd5e1 !important;'; ?>">
+                                            <option value="" style="background-color:#ffffff !important; color:#64748b !important; font-weight:500;" <?php echo ($curr_st === '') ? 'selected' : ''; ?>>-- Select Status --</option>
+                                            <?php foreach ($strict_statuses as $st_code => $st_data): 
+                                                $selected = ($curr_st === $st_code) ? 'selected' : '';
+                                            ?>
+                                                <option value="<?php echo $st_code; ?>" style="background-color:<?php echo $st_data['color']; ?> !important; color:#ffffff !important; font-weight:700;" <?php echo $selected; ?>>
+                                                    <?php echo htmlspecialchars($st_code); ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <?php if ($curr_st === 'OS'): 
+                                            $os_reason = $lead['os_sub_reason'] ?? $lead['site_location'] ?? '';
+                                        ?>
+                                            <div class="os-subreason-badge mt-1 text-center" data-lead-id="<?php echo $lead['id']; ?>">
+                                                <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 px-2 py-0.5 os-select-trigger cursor-pointer" data-lead-id="<?php echo $lead['id']; ?>" style="font-size: 10.5px; font-weight: 600; cursor: pointer;" title="Click to view/change OS Location or Reason">
+                                                    <i class="fa-solid fa-map-pin me-1"></i><span><?php echo !empty($os_reason) ? htmlspecialchars($os_reason) : 'Select OS Reason...'; ?></span> <i class="fa-solid fa-chevron-down ms-1" style="font-size: 8px;"></i>
+                                                </span>
+                                            </div>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
                                 </td>
 
                                 <!-- 11. REMARK 1 -->
                                 <td>
-                                    <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" rows="2" placeholder="Stage 1 remark..." title="<?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?>"><?php echo htmlspecialchars($lead['remark_1'] ?? ''); ?></textarea>
+                                    <?php if ($has_tc2): 
+                                        $r1_val = $tc2_info['previous_remarks'] ?? '';
+                                    ?>
+                                        <textarea class="excel-cell-input excel-cell-remark" rows="2" readonly style="background-color: #f8fafc !important; color: #475569; cursor: default;" title="<?php echo htmlspecialchars($r1_val); ?>" placeholder="No TC-1 remarks"><?php echo htmlspecialchars($r1_val); ?></textarea>
+                                    <?php else: 
+                                        $r1_val = $lead['remark_1'] ?? '';
+                                    ?>
+                                        <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" rows="2" placeholder="Stage 1 remark..." title="<?php echo htmlspecialchars($r1_val); ?>"><?php echo htmlspecialchars($r1_val); ?></textarea>
+                                    <?php endif; ?>
+                                </td>
+
+                                <!-- TC-2 NAME -->
+                                <td style="background-color: rgba(22, 163, 74, 0.02); text-align: center;">
+                                    <?php 
+                                    $curr_tc2_id = $has_tc2 ? (int)$tc2_info['to_telecaller_id'] : 0;
+                                    $tc2_found = false;
+                                    ?>
+                                    <div class="d-flex flex-column align-items-center gap-1">
+                                        <select class="excel-cell-select" data-lead-id="<?php echo $lead['id']; ?>" data-field="tc2_telecaller_id" title="Assign or Change TC-2 Telecaller" style="background-color: #f0fdf4 !important; border: 1.5px solid #86efac !important; color: #166534 !important; font-weight: 700 !important; font-size: 11.5px; padding: 2px 6px; border-radius: 6px; min-width: 125px; cursor: pointer;">
+                                            <option value="" style="background-color: #ffffff; color: #64748b; font-weight: normal;">-- No TC-2 --</option>
+                                            <?php foreach($all_tcs as $tc_u): 
+                                                $is_sel = ($curr_tc2_id === (int)$tc_u['id']);
+                                                if ($is_sel) $tc2_found = true;
+                                            ?>
+                                                <option value="<?php echo $tc_u['id']; ?>" <?php echo $is_sel ? 'selected' : ''; ?> style="background-color: #ffffff; color: #1e293b; font-weight: <?php echo $is_sel ? '700' : 'normal'; ?>;">
+                                                    <?php echo htmlspecialchars($tc_u['name']); ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                            <?php if ($has_tc2 && !$tc2_found && !empty($tc2_info['to_caller_name'])): ?>
+                                                <option value="<?php echo $curr_tc2_id; ?>" selected style="background-color: #ffffff; color: #1e293b; font-weight: 700;">
+                                                    <?php echo htmlspecialchars($tc2_info['to_caller_name']); ?>
+                                                </option>
+                                            <?php endif; ?>
+                                        </select>
+                                        <?php if ($has_tc2 && $is_int_lead): ?>
+                                            <span class="badge bg-success text-white" style="font-size: 9.5px; padding: 2px 6px;" title="TC-2 successfully converted this shuffled lead to INT!">
+                                                <i class="fa-solid fa-wand-magic-sparkles me-0.5"></i>Recovered INT
+                                            </span>
+                                        <?php endif; ?>
+                                    </div>
+                                </td>
+
+                                <!-- TC-2 STATUS -->
+                                <td style="background-color: rgba(22, 163, 74, 0.02); text-align: center;">
+                                    <?php if ($has_tc2): 
+                                        $strict_statuses = getStrictLeadStatuses();
+                                        $tc2_raw = trim((string)($lead['status'] ?? 'New'));
+                                        $tc2_st = normalizeLeadStatus($tc2_raw ?: 'New');
+                                    ?>
+                                        <select class="table-inline-status" data-lead-id="<?php echo $lead['id']; ?>" data-field="status" data-current-status="<?php echo htmlspecialchars($tc2_st); ?>" style="<?php echo ($tc2_st !== '') ? 'background-color: ' . getLeadStatusColor($tc2_st) . ' !important; color: #ffffff !important; font-weight: 700 !important; border-color: ' . getLeadStatusColor($tc2_st) . ' !important;' : 'background-color: #f8fafc !important; color: #64748b !important; font-weight: 600 !important; border: 1.5px dashed #cbd5e1 !important;'; ?>">
+                                            <option value="" style="background-color:#ffffff !important; color:#64748b !important; font-weight:500;">-- Select Status --</option>
+                                            <?php foreach ($strict_statuses as $st_code => $st_data): 
+                                                $selected = ($tc2_st === $st_code) ? 'selected' : '';
+                                            ?>
+                                                <option value="<?php echo $st_code; ?>" style="background-color:<?php echo $st_data['color']; ?> !important; color:#ffffff !important; font-weight:700;" <?php echo $selected; ?>>
+                                                    <?php echo htmlspecialchars($st_code); ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <?php if ($tc2_st === 'OS'): 
+                                            $os_reason = $lead['os_sub_reason'] ?? $lead['site_location'] ?? '';
+                                        ?>
+                                            <div class="os-subreason-badge mt-1 text-center" data-lead-id="<?php echo $lead['id']; ?>">
+                                                <span class="badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25 px-2 py-0.5 os-select-trigger cursor-pointer" data-lead-id="<?php echo $lead['id']; ?>" style="font-size: 10.5px; font-weight: 600; cursor: pointer;" title="Click to view/change OS Location or Reason">
+                                                    <i class="fa-solid fa-map-pin me-1"></i><span><?php echo !empty($os_reason) ? htmlspecialchars($os_reason) : 'Select OS Reason...'; ?></span> <i class="fa-solid fa-chevron-down ms-1" style="font-size: 8px;"></i>
+                                                </span>
+                                            </div>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span class="text-muted small">-</span>
+                                    <?php endif; ?>
+                                </td>
+
+                                <!-- TC-2 REMARK -->
+                                <td style="background-color: rgba(22, 163, 74, 0.02);">
+                                    <?php if ($has_tc2): 
+                                        $tc2_remark = $lead['remark_1'] ?? ($tc2_info['new_remarks'] ?? '');
+                                    ?>
+                                        <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_1" rows="2" placeholder="TC-2 remark..." title="<?php echo htmlspecialchars($tc2_remark); ?>" style="background-color: #f0fdf4 !important; border-color: #bbf7d0 !important;"><?php echo htmlspecialchars($tc2_remark); ?></textarea>
+                                    <?php else: ?>
+                                        <span class="text-muted small ps-2">-</span>
+                                    <?php endif; ?>
                                 </td>
 
                                 <!-- 12. SITE LOCATION (Dropdown 2/4) -->
@@ -916,56 +1422,82 @@ if (empty($all_projects)) {
                                     <?php $sloc = $lead['site_location'] ?? ''; ?>
                                     <select class="excel-cell-select" data-lead-id="<?php echo $lead['id']; ?>" data-field="site_location" title="Select Site Location">
                                         <option value="">-- Site Location --</option>
-                                        <option value="DGC-I" <?php echo $sloc === 'DGC-I' ? 'selected' : ''; ?>>DGC-I</option>
-                                        <option value="DGC-II" <?php echo $sloc === 'DGC-II' ? 'selected' : ''; ?>>DGC-II</option>
-                                        <option value="DGC-III" <?php echo $sloc === 'DGC-III' ? 'selected' : ''; ?>>DGC-III</option>
-                                        <option value="SGC" <?php echo $sloc === 'SGC' ? 'selected' : ''; ?>>SGC</option>
-                                        <option value="NGC" <?php echo $sloc === 'NGC' ? 'selected' : ''; ?>>NGC</option>
-                                        <option value="DGC-IV" <?php echo $sloc === 'DGC-IV' ? 'selected' : ''; ?>>DGC-IV</option>
-                                        <option value="Multiple Sites" <?php echo $sloc === 'Multiple Sites' ? 'selected' : ''; ?>>Multiple Sites</option>
-                                        <option value="All SITES" <?php echo $sloc === 'All SITES' ? 'selected' : ''; ?>>All SITES</option>
-                                        <option value="Other" <?php echo ($sloc === 'Other' || (!empty($sloc) && !in_array($sloc, ['DGC-I','DGC-II','DGC-III','SGC','NGC','DGC-IV','Multiple Sites','All SITES']))) ? 'selected' : ''; ?>>Other</option>
+                                        <?php foreach ($site_locations as $loc_opt): ?>
+                                            <option value="<?php echo htmlspecialchars($loc_opt); ?>" <?php echo $sloc === $loc_opt ? 'selected' : ''; ?>><?php echo htmlspecialchars($loc_opt); ?></option>
+                                        <?php endforeach; ?>
+                                        <?php if (!empty($sloc) && !in_array($sloc, $site_locations)): ?>
+                                            <option value="<?php echo htmlspecialchars($sloc); ?>" selected><?php echo htmlspecialchars($sloc); ?></option>
+                                        <?php endif; ?>
+                                        <option value="__add_new_location__" style="color: #7c3aed; font-weight: 700; background: #f5f3ff;">➕ Add New Location...</option>
                                     </select>
                                 </td>
 
-                                <!-- 13. FOLLOWUP 1 -->
+                                <!-- BUDGET (Dynamic Dropdown) -->
+                                <td>
+                                    <?php 
+                                    $lead_b = $lead['budget'] ?? ''; 
+                                    $has_b_match = false;
+                                    ?>
+                                    <select class="excel-cell-select" data-lead-id="<?php echo $lead['id']; ?>" data-field="budget" title="Select Budget Range" style="width: 100%;">
+                                        <option value="">-- Budget --</option>
+                                        <?php foreach ($budget_list as $b_opt): 
+                                            $b_sel = ($lead_b === $b_opt);
+                                            if ($b_sel) $has_b_match = true;
+                                        ?>
+                                            <option value="<?php echo htmlspecialchars($b_opt); ?>" <?php echo $b_sel ? 'selected' : ''; ?>><?php echo htmlspecialchars($b_opt); ?></option>
+                                        <?php endforeach; ?>
+                                        <?php if (!empty($lead_b) && !$has_b_match): ?>
+                                            <option value="<?php echo htmlspecialchars($lead_b); ?>" selected><?php echo htmlspecialchars($lead_b); ?></option>
+                                        <?php endif; ?>
+                                        <?php if (isAdmin() || isSalesManager()): ?>
+                                            <option value="__add_new_budget__" style="color: #059669; font-weight: 700; background: #ecfdf5;">➕ Add New Budget...</option>
+                                        <?php endif; ?>
+                                    </select>
+                                </td>
+
+                                <!-- 11. UPCOMING_FOLLOW-UP -->
+                                <td>
+                                    <input type="datetime-local" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="upcoming_follow_up" value="<?php echo $upfu_val; ?>">
+                                </td>
+
+                                <!-- 12. FOLLOWUP 1 -->
                                 <td>
                                     <input type="datetime-local" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="followup_1" value="<?php echo $fu1_val; ?>">
                                 </td>
 
-                                <!-- 14. REMARK 2 -->
+                                <!-- 13. REMARK 2 -->
                                 <td>
                                     <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_2" rows="2" placeholder="Stage 2 remark..." title="<?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?>"><?php echo htmlspecialchars($lead['remark_2'] ?? ''); ?></textarea>
                                 </td>
 
-                                <!-- 15. FOLLOWUP 2 -->
+                                <!-- 14. FOLLOWUP 2 -->
                                 <td>
                                     <input type="datetime-local" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="followup_2" value="<?php echo $fu2_val; ?>">
                                 </td>
 
-                                <!-- 16. REMARK-3 -->
+                                <!-- 15. REMARK-3 -->
                                 <td>
                                     <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="remark_3" rows="2" placeholder="Stage 3 remark..." title="<?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?>"><?php echo htmlspecialchars($lead['remark_3'] ?? ''); ?></textarea>
                                 </td>
 
-                                <!-- 17. DAYS -->
+                                <!-- 16. DAYS -->
                                 <td class="text-center text-nowrap">
                                     <span class="badge <?php echo ($days_elapsed > 7) ? 'bg-danger-subtle text-danger border border-danger' : (($days_elapsed > 3) ? 'bg-warning-subtle text-warning border border-warning' : 'bg-light text-dark border'); ?> rounded-pill px-2 py-1 fw-bold" style="font-size: 11px;">
                                         <?php echo $days_elapsed; ?> d
                                     </span>
                                 </td>
 
-                                <!-- 18. VISIT (Text Input) -->
+                                <!-- 17. VISIT(EXPECTED VISIT DATE) -->
                                 <td>
-                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_status" value="<?php echo htmlspecialchars($lead['visit_status'] ?? ''); ?>" placeholder="Visit details">
+                                    <input type="date" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_status" value="<?php echo $exp_vdate_val; ?>" title="Expected Visit Date">
                                 </td>
 
-                                <!-- 19. DATE (Visit Date) -->
+                                <!-- 18. VISIT DATE -->
                                 <td>
                                     <input type="datetime-local" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_date" value="<?php echo $vdate_val; ?>">
                                 </td>
 
-                                <!-- 20. VISIT DONE (Dropdown 3/4) -->
+                                <!-- 19. VISIT DONE -->
                                 <td>
                                     <?php $vdone = strtoupper($lead['visit_done'] ?? ''); ?>
                                     <select class="excel-cell-select" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_done">
@@ -975,37 +1507,77 @@ if (empty($all_projects)) {
                                     </select>
                                 </td>
 
-                                <!-- 21. REMARK (Visit Feedback) -->
+                                <!-- 20. TEAM_HEAD -->
+                                <td>
+                                    <input type="text" class="excel-cell-input fw-semibold" data-lead-id="<?php echo $lead['id']; ?>" data-field="team_head" value="<?php echo htmlspecialchars($lead['team_head'] ?? ($lead['sales_manager_name'] ?? '')); ?>" placeholder="Team Head">
+                                </td>
+
+                                <!-- 21. MANAGER _NAME -->
+                                <td>
+                                    <input type="text" class="excel-cell-input fw-semibold" data-lead-id="<?php echo $lead['id']; ?>" data-field="manager_name" value="<?php echo htmlspecialchars($lead['manager_name'] ?? ($lead['sales_manager_name'] ?? '')); ?>" placeholder="Manager Name">
+                                </td>
+
+                                <!-- 22. VISIT_DONE_BY -->
+                                <td>
+                                    <input type="text" class="excel-cell-input fw-semibold" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_done_by" value="<?php echo htmlspecialchars($lead['visit_done_by'] ?? ($lead['sales_name'] ?? '')); ?>" placeholder="Visit Done By">
+                                </td>
+
+                                <!-- 23. VISIT REMARK -->
                                 <td>
                                     <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="visit_remark" rows="2" placeholder="Visit feedback..." title="<?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?>"><?php echo htmlspecialchars($lead['visit_remark'] ?? ($lead['site_visit_feedback'] ?? '')); ?></textarea>
                                 </td>
 
-                                <!-- 22. DATE (Booking Date) -->
+                                <!-- 24. HAPPY_CALLING_DATE -->
+                                <td>
+                                    <input type="date" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="happy_calling_date" value="<?php echo $hcdate_val; ?>">
+                                </td>
+
+                                <!-- 25. HAPPY_CALLING_STATUS -->
+                                <td>
+                                    <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="happy_calling_status" value="<?php echo htmlspecialchars($lead['happy_calling_status'] ?? ''); ?>" placeholder="Status">
+                                </td>
+
+                                <!-- 26. HAPPY_CALLING_REMARK -->
+                                <td>
+                                    <textarea class="excel-cell-input excel-cell-remark" data-lead-id="<?php echo $lead['id']; ?>" data-field="happy_calling_remark" rows="2" placeholder="Happy call remark..." title="<?php echo htmlspecialchars($lead['happy_calling_remark'] ?? ''); ?>"><?php echo htmlspecialchars($lead['happy_calling_remark'] ?? ''); ?></textarea>
+                                </td>
+
+                                <!-- 27. BOOKING DATE -->
                                 <td>
                                     <input type="date" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="booking_date" value="<?php echo $bdate_val; ?>">
                                 </td>
 
-                                <!-- 23. NAME ON (Name on Registry) -->
+                                <!-- 28. NAME ON BOOKING FORM -->
                                 <td>
                                     <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="registry_name" value="<?php echo htmlspecialchars($lead['registry_name'] ?? $lead['name']); ?>" placeholder="Customer name">
                                 </td>
 
-                                <!-- 24. NUMBER (Plot/Flat Unit #) -->
+                                <!-- 29. FINAL_STATUS(MANAGER) -->
+                                <td>
+                                    <input type="text" class="excel-cell-input fw-semibold" data-lead-id="<?php echo $lead['id']; ?>" data-field="final_status_manager" value="<?php echo htmlspecialchars($lead['final_status_manager'] ?? ''); ?>" placeholder="Manager Status">
+                                </td>
+
+                                <!-- 30. FINAL_STATUS_DATE(MANAGER) -->
+                                <td>
+                                    <input type="date" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="final_status_date_manager" value="<?php echo $fsdate_val; ?>">
+                                </td>
+
+                                <!-- 31. UNIT NUMBER -->
                                 <td>
                                     <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="registry_unit_number" value="<?php echo htmlspecialchars($lead['registry_unit_number'] ?? ($lead['unit_number'] ?? '')); ?>" placeholder="Plot/Flat #">
                                 </td>
 
-                                <!-- 25. AREA -->
+                                <!-- 32. AREA -->
                                 <td>
                                     <input type="text" class="excel-cell-input" data-lead-id="<?php echo $lead['id']; ?>" data-field="registry_area" value="<?php echo htmlspecialchars($lead['registry_area'] ?? ''); ?>" placeholder="Sq.Ft. / Size">
                                 </td>
 
-                                <!-- 26. REG DATE -->
+                                <!-- 33. REG DATE -->
                                 <td>
                                     <input type="date" class="excel-cell-date" data-lead-id="<?php echo $lead['id']; ?>" data-field="registry_date" value="<?php echo $regdate_val; ?>">
                                 </td>
 
-                                <!-- 27. REG STATUS (Dropdown 4/4) -->
+                                <!-- 34. REG STATUS -->
                                 <td>
                                     <?php $reg_st = strtoupper($lead['registry_status'] ?? 'PENDING'); ?>
                                     <select class="excel-cell-select" data-lead-id="<?php echo $lead['id']; ?>" data-field="registry_status">
@@ -1031,6 +1603,11 @@ if (empty($all_projects)) {
                                         <button type="button" class="btn btn-xs btn-outline-success" data-bs-toggle="modal" data-bs-target="#assignSalesModal<?php echo $lead['id']; ?>" title="Forward / Assign to Salesperson">
                                             <i class="fa-solid fa-user-tie"></i>
                                         </button>
+                                        <?php if(!empty($lead['sales_manager_id']) || !empty($lead['salesperson_id'])): ?>
+                                        <button type="button" class="btn btn-xs btn-outline-danger" data-bs-toggle="modal" data-bs-target="#unassignSalesAdminModal<?php echo $lead['id']; ?>" title="↩️ Unassign / Remove from Sales (Return to Unassigned Pool)">
+                                            <i class="fa-solid fa-user-xmark"></i>
+                                        </button>
+                                        <?php endif; ?>
                                         <button type="button" class="btn btn-xs btn-outline-warning" data-bs-toggle="modal" data-bs-target="#adminNoteModal<?php echo $lead['id']; ?>" title="Send Note/Instruction">
                                             <i class="fa-solid fa-crown"></i>
                                         </button>
@@ -1062,17 +1639,45 @@ if (empty($all_projects)) {
                                                                 <div class="col-6"><strong>Telecaller:</strong> <?php echo htmlspecialchars($lead['telecaller_name'] ?? 'Unassigned'); ?></div>
                                                             </div>
                                                         </div>
+                                                        <?php if(!empty($lead['sales_manager_id']) || !empty($lead['salesperson_id'])): ?>
+                                                        <div class="alert alert-info py-2 px-3 small border mb-3 d-flex align-items-center justify-content-between">
+                                                            <div>
+                                                                <i class="fa-solid fa-user-check text-primary me-1"></i><strong>Currently Assigned:</strong> 
+                                                                <?php echo htmlspecialchars($lead['sales_manager_name'] ?? $lead['sales_name'] ?? 'Sales Member'); ?>
+                                                                <?php if(!empty($lead['sales_branch_title'])): ?>
+                                                                    (<?php echo htmlspecialchars($lead['sales_branch_title']); ?>)
+                                                                <?php endif; ?>
+                                                            </div>
+                                                            <button type="submit" name="action" value="unassign_sales_lead" class="btn btn-xs btn-outline-danger fw-semibold" onclick="return confirm('Remove this lead from sales team and return to unassigned pool?');">
+                                                                <i class="fa-solid fa-arrow-rotate-left me-1"></i>Unassign / Remove
+                                                            </button>
+                                                        </div>
+                                                        <?php endif; ?>
                                                         <div class="mb-3">
                                                             <label class="form-label fw-semibold text-dark">Select Salesperson / Sales Manager <span class="text-danger">*</span></label>
                                                             <select name="salesperson_id" class="form-select" required>
-                                                                <option value="" disabled selected>-- Choose Sales Person --</option>
-                                                                <?php 
-                                                                $sales_team_list = $pdo->query("SELECT id, name, role, phone FROM users WHERE role = 'sales' AND (is_active IS NULL OR is_active = 1) ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
-                                                                foreach ($sales_team_list as $sm): ?>
-                                                                    <option value="<?php echo $sm['id']; ?>" <?php echo ($lead['salesperson_id'] == $sm['id']) ? 'selected' : ''; ?>>
-                                                                        <?php echo htmlspecialchars($sm['name']) . ' (Sales)'; ?>
-                                                                    </option>
-                                                                <?php endforeach; ?>
+                                                                <option value="" disabled <?php echo (empty($lead['sales_manager_id']) && empty($lead['salesperson_id'])) ? 'selected' : ''; ?>>-- Select Branch Head or Sales Executive --</option>
+                                                                <?php if(!empty($lead['sales_manager_id']) || !empty($lead['salesperson_id'])): ?>
+                                                                    <option value="0" class="text-danger fw-bold">❌ Remove from Sales Team (Mark Unassigned)</option>
+                                                                <?php endif; ?>
+                                                                <?php if(!empty($sales_managers_leads)): ?>
+                                                                    <optgroup label="🏢 Branch Heads / Sales Managers (Delegates to team or handles visit)">
+                                                                        <?php foreach ($sales_managers_leads as $sm): ?>
+                                                                            <option value="<?php echo $sm['id']; ?>" <?php echo (($lead['sales_manager_id'] ?? 0) == $sm['id'] || ($lead['salesperson_id'] ?? 0) == $sm['id']) ? 'selected' : ''; ?>>
+                                                                                <?php echo htmlspecialchars($sm['name']) . (!empty($sm['branch_name']) ? ' [Branch: '.$sm['branch_name'].']' : '') . ' - Branch Head'; ?>
+                                                                            </option>
+                                                                        <?php endforeach; ?>
+                                                                    </optgroup>
+                                                                <?php endif; ?>
+                                                                <?php if(!empty($sales_execs_leads)): ?>
+                                                                    <optgroup label="👤 Field Sales Persons (Direct executive assignment)">
+                                                                        <?php foreach ($sales_execs_leads as $se): ?>
+                                                                            <option value="<?php echo $se['id']; ?>" <?php echo (($lead['salesperson_id'] ?? 0) == $se['id']) ? 'selected' : ''; ?>>
+                                                                                <?php echo htmlspecialchars($se['name']) . (!empty($se['manager_name']) ? ' [Under: '.$se['manager_name'].']' : '') . (!empty($se['branch_name']) ? ' ['.$se['branch_name'].']' : '') . ' - Sales Exec'; ?>
+                                                                            </option>
+                                                                        <?php endforeach; ?>
+                                                                    </optgroup>
+                                                                <?php endif; ?>
                                                             </select>
                                                         </div>
                                                         <div class="mb-3">
@@ -1080,14 +1685,71 @@ if (empty($all_projects)) {
                                                             <textarea name="admin_note" class="form-control" rows="3" placeholder="e.g. Client interested in 3BHK, schedule site visit for this weekend..."></textarea>
                                                         </div>
                                                     </div>
-                                                    <div class="modal-footer bg-light px-4 py-3 border-top">
-                                                        <button type="button" class="btn btn-outline-secondary px-3" data-bs-dismiss="modal">Cancel</button>
-                                                        <button type="submit" class="btn btn-success px-4 fw-semibold shadow-sm"><i class="fa-solid fa-paper-plane me-2"></i>Assign to Sales Now</button>
+                                                    <div class="modal-footer bg-light px-4 py-3 border-top d-flex justify-content-between">
+                                                        <?php if(!empty($lead['sales_manager_id']) || !empty($lead['salesperson_id'])): ?>
+                                                            <button type="submit" name="action" value="unassign_sales_lead" class="btn btn-outline-danger btn-sm fw-semibold" onclick="return confirm('Remove lead from sales and return to unassigned pool?');">
+                                                                <i class="fa-solid fa-arrow-rotate-left me-1"></i>Unassign Lead
+                                                            </button>
+                                                        <?php else: ?>
+                                                            <div></div>
+                                                        <?php endif; ?>
+                                                        <div class="d-flex gap-2">
+                                                            <button type="button" class="btn btn-outline-secondary px-3" data-bs-dismiss="modal">Cancel</button>
+                                                            <button type="submit" class="btn btn-success px-4 fw-semibold shadow-sm"><i class="fa-solid fa-paper-plane me-2"></i>Assign to Sales Now</button>
+                                                        </div>
                                                     </div>
                                                 </form>
                                             </div>
                                         </div>
                                     </div>
+
+                                    <?php if(!empty($lead['sales_manager_id']) || !empty($lead['salesperson_id'])): ?>
+                                    <!-- Modal: Return / Unassign Lead from Sales (Admin Quick Action) -->
+                                    <div class="modal fade text-start" id="unassignSalesAdminModal<?php echo $lead['id']; ?>" tabindex="-1">
+                                        <div class="modal-dialog modal-dialog-centered">
+                                            <div class="modal-content border-0 shadow-lg" style="border-radius: 14px;">
+                                                <form action="leads.php" method="POST">
+                                                    <input type="hidden" name="action" value="unassign_sales_lead">
+                                                    <input type="hidden" name="lead_id" value="<?php echo $lead['id']; ?>">
+                                                    <div class="modal-header bg-danger bg-opacity-10 border-bottom px-4 py-3">
+                                                        <div class="d-flex align-items-center gap-2">
+                                                            <span class="badge bg-danger text-white px-2 py-1"><i class="fa-solid fa-arrow-rotate-left me-1"></i> Unassign Lead</span>
+                                                            <h6 class="modal-title fw-bold text-danger mb-0">Remove from Sales Pipeline</h6>
+                                                        </div>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                                    </div>
+                                                    <div class="modal-body p-4">
+                                                        <div class="p-3 bg-light rounded-3 mb-3 border">
+                                                            <div class="row g-2 small">
+                                                                <div class="col-6"><strong>Lead Code:</strong> <?php echo htmlspecialchars(getLeadCode($lead)); ?></div>
+                                                                <div class="col-6"><strong>Customer:</strong> <?php echo htmlspecialchars($lead['name']); ?></div>
+                                                                <div class="col-6"><strong>Phone:</strong> <?php echo htmlspecialchars($lead['phone']); ?></div>
+                                                                <div class="col-6"><strong>Currently With:</strong> <?php echo htmlspecialchars($lead['sales_manager_name'] ?? $lead['sales_name'] ?? 'Sales Member'); ?></div>
+                                                            </div>
+                                                        </div>
+                                                        <div class="alert alert-warning py-2 px-3 small border-0 mb-3 d-flex align-items-start gap-2">
+                                                            <i class="fa-solid fa-triangle-exclamation mt-1 text-warning fa-lg"></i>
+                                                            <div>
+                                                                <strong>Kya aap is lead ko Sales team se hatana chahte hain?</strong><br>
+                                                                Ye lead Sales Manager / Executive se hatkar wapas unassigned pool me chali jayegi taaki ise fir se kisi aur ko assign kiya ja sake.
+                                                            </div>
+                                                        </div>
+                                                        <div class="mb-2">
+                                                            <label class="form-label fw-bold text-dark small">Reason / Note (Optional)</label>
+                                                            <textarea name="reason" class="form-control form-control-sm" rows="2" placeholder="e.g. Galti se assign hui thi, dusre manager/salesperson ko forward karni hai..."></textarea>
+                                                        </div>
+                                                    </div>
+                                                    <div class="modal-footer bg-light px-4 py-3 border-top">
+                                                        <button type="button" class="btn btn-outline-secondary btn-sm px-3" data-bs-dismiss="modal">Cancel</button>
+                                                        <button type="submit" class="btn btn-danger btn-sm px-4 fw-bold shadow-sm">
+                                                            <i class="fa-solid fa-arrow-rotate-left me-1"></i> Confirm & Return to Pool
+                                                        </button>
+                                                    </div>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <?php endif; ?>
 
                                     <!-- Admin Instruction Modal -->
                                     <div class="modal fade text-start" id="adminNoteModal<?php echo $lead['id']; ?>" tabindex="-1">
@@ -1122,7 +1784,7 @@ if (empty($all_projects)) {
                             </tr>
                             <?php endforeach; ?>
                             <?php if(count($leads) == 0): ?>
-                            <tr><td colspan="28" class="text-center py-5 text-muted">No leads found matching your search or filters.</td></tr>
+                            <tr><td colspan="27" class="text-center py-5 text-muted">No leads found matching your search or filters.</td></tr>
                             <?php endif; ?>
                         </tbody>
                     </table>
@@ -1250,10 +1912,7 @@ if (empty($all_projects)) {
                             <select name="project" class="form-select">
                                 <option value="">Select Project...</option>
                                 <?php
-                                $all_projects = $pdo->query("SELECT DISTINCT project FROM leads WHERE project IS NOT NULL AND project != '' ORDER BY project")->fetchAll(PDO::FETCH_COLUMN);
-                                if (empty($all_projects)) {
-                                    $all_projects = ['Vayu Green', 'Vayu Villa Commercial', 'Golden Cryst', 'My Home Century', 'Green Valley'];
-                                }
+                                $all_projects = getCrmProjectsList($pdo);
                                 foreach ($all_projects as $pr): ?>
                                     <option value="<?php echo htmlspecialchars($pr); ?>"><?php echo htmlspecialchars($pr); ?></option>
                                 <?php endforeach; ?>
@@ -1285,14 +1944,14 @@ if (empty($all_projects)) {
                         <strong>Note:</strong> Only untouched leads with status = <code>New</code> and <code>0 notes/work</code> will be transferred. Leads with work done will NOT be touched.
                     </p>
                     <div class="mb-3">
-                        <label class="form-label fw-semibold">Select Telecaller / Sales Member <span class="text-danger">*</span></label>
+                        <label class="form-label fw-semibold">Select Telecaller <span class="text-danger">*</span></label>
                         <select name="target_user_id" class="form-select" required>
-                            <option value="">-- Choose Team Member --</option>
+                            <option value="">-- Choose Telecaller --</option>
                             <?php
-                            $all_tc = $pdo->query("SELECT id, name, role, is_present FROM users WHERE role IN ('telecaller','sales') ORDER BY is_present DESC, name ASC")->fetchAll();
+                            $all_tc = $pdo->query("SELECT id, name, role, is_present FROM users WHERE role = 'telecaller' AND (is_active IS NULL OR is_active = 1) ORDER BY is_present DESC, name ASC")->fetchAll();
                             foreach ($all_tc as $u): ?>
                                 <option value="<?php echo $u['id']; ?>">
-                                    <?php echo htmlspecialchars($u['name']); ?> (<?php echo ucfirst($u['role']); ?>) — <?php echo $u['is_present'] ? 'PRESENT' : 'ABSENT'; ?>
+                                    <?php echo htmlspecialchars($u['name']); ?> — <?php echo $u['is_present'] ? 'PRESENT' : 'ABSENT'; ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -1423,8 +2082,8 @@ if (empty($all_projects)) {
                 <div class="modal-body p-4" style="overflow-y: auto; flex: 1 1 auto; max-height: calc(90vh - 140px);">
                     <div class="alert alert-info py-2 px-3 mb-3 border-0 d-flex align-items-center justify-content-between flex-wrap gap-2" style="background-color: #e8f4fd; border-radius: 8px;">
                         <div class="small text-primary-emphasis">
-                            <i class="fa-solid fa-scale-balanced me-1"></i>
-                            <strong>Equal Distribution Mode:</strong> Selected leads from source telecallers will be mixed and distributed <strong>equally & fairly</strong> among all checked destination telecallers.
+                            <i class="fa-solid fa-arrows-spin me-1"></i>
+                            <strong>Smart Cross-Shuffle Mode:</strong> Leads are exchanged strictly across <strong>other telecallers</strong> (no telecaller will receive their own leads back) and distributed <strong>equally & fairly</strong>.
                         </div>
                         <div class="form-check form-switch mb-0">
                             <input class="form-check-input" type="checkbox" name="reset_status_new" id="reset_status_new" value="1" checked style="cursor: pointer;">
@@ -1521,59 +2180,24 @@ if (empty($all_projects)) {
                         <div class="p-3 bg-light rounded-3 border" style="max-height: 280px; overflow-y: auto;">
                             <div class="row g-2">
                                 <?php 
-                                $all_modal_statuses = [
-                                    // Calling & Table Dropdown Statuses
-                                    'INT'                  => 'primary',
-                                    'NI'                   => 'danger',
-                                    'Out of Service'       => 'secondary',
-                                    'Invalid Number'       => 'dark',
-                                    'Incoming Off'         => 'secondary',
-                                    'OTH Call Back'        => 'warning',
-                                    'Call Forwarding'      => 'info',
-                                    'Call Disconnect'      => 'warning',
-                                    'OS'                   => 'secondary',
-                                    'OTH'                  => 'secondary',
-                                    'OTH_NOT_PICK'         => 'secondary',
-                                    'OTH_BUSY'             => 'secondary',
-                                    'OTH_SWITCH_OFF'       => 'secondary',
-                                    'OTH_NETWORK'          => 'secondary',
-                                    'New'                  => 'primary',
-                                    'Follow Up'            => 'warning',
-                                    'Site Visit Scheduled' => 'primary',
-                                    'Site Visit Done'      => 'success',
-                                    'Re-Visit Scheduled'   => 'primary',
-                                    'Negotiation'          => 'info',
-                                    'Assigned to Sales'    => 'success',
-                                    'Booked / Token Paid'  => 'success',
-                                    'Converted'            => 'success',
-                                    'Dead'                 => 'danger',
-                                    'DND'                  => 'dark',
-                                    // Additional & Alternate Statuses
-                                    'In Progress'          => 'info',
-                                    'Not Interested'       => 'danger',
-                                    'RNR (No Response)'    => 'secondary',
-                                    'Busy / Callback'      => 'secondary',
-                                    'Switched Off'         => 'secondary',
-                                    'Wrong Number'         => 'dark',
-                                    'Budget Issue'         => 'warning',
-                                    'Location Mismatch'    => 'warning'
-                                ];
+                                $all_modal_statuses = getStrictLeadStatuses();
                                 $st_idx = 0;
-                                foreach ($all_modal_statuses as $st_name => $st_color): 
+                                foreach ($all_modal_statuses as $st_name => $st_info): 
                                     $st_idx++;
-                                    // Protect sensitive statuses: INT, Site Visits, Bookings, Converted should NOT be checked by default
-                                    $is_protected = in_array($st_name, ['INT', 'Interested', 'Site Visit Scheduled', 'Site Visit Done', 'Re-Visit Scheduled', 'Negotiation', 'Booked / Token Paid', 'Converted']);
+                                    // Protect sensitive statuses: INT and INT_VISIT_DONE MUST NEVER be checked by default
+                                    $is_protected = !empty($st_info['protected']);
                                     $is_checked = !$is_protected ? 'checked' : '';
+                                    $st_color = $st_info['bg_class'] ?? 'secondary';
                                 ?>
                                     <div class="col-6 col-sm-4 col-md-3 col-xl-3">
                                         <div class="form-check">
-                                            <input class="form-check-input status_shuffle_cb" type="checkbox" name="statuses[]" value="<?php echo htmlspecialchars($st_name); ?>" id="sh_st_<?php echo $st_idx; ?>" <?php echo $is_checked; ?> <?php echo $is_protected ? 'data-protected="1"' : ''; ?>>
-                                            <label class="form-check-label fw-medium text-dark small" for="sh_st_<?php echo $st_idx; ?>">
+                                            <input class="form-check-input status_shuffle_cb" type="checkbox" name="statuses[]" value="<?php echo htmlspecialchars($st_name); ?>" id="sh_st_<?php echo $st_idx; ?>" <?php echo $is_checked; ?> <?php echo $is_protected ? 'disabled title="Protected: INT & Site Visit leads can never be shuffled" data-protected="1"' : ''; ?>>
+                                            <label class="form-check-label fw-medium text-dark small <?php echo $is_protected ? 'opacity-75' : ''; ?>" for="sh_st_<?php echo $st_idx; ?>">
                                                 <span class="badge bg-<?php echo $st_color; ?> bg-opacity-10 text-<?php echo $st_color === 'warning' ? 'warning-emphasis' : $st_color; ?> border border-<?php echo $st_color; ?> border-opacity-25 px-2 py-1">
                                                     <?php echo htmlspecialchars($st_name); ?>
                                                 </span>
                                                 <?php if ($is_protected): ?>
-                                                    <span class="badge bg-danger bg-opacity-10 text-danger border border-danger border-opacity-25 ms-1" style="font-size: 10px;" title="Protected / Never Shuffled"><i class="fa-solid fa-lock me-1"></i>Protected</span>
+                                                    <span class="badge bg-danger bg-opacity-10 text-danger border border-danger border-opacity-25 ms-1" style="font-size: 10px;" title="Protected: Can Never Be Shuffled"><i class="fa-solid fa-lock me-1"></i>Protected</span>
                                                 <?php endif; ?>
                                             </label>
                                         </div>
@@ -1581,15 +2205,78 @@ if (empty($all_projects)) {
                                 <?php endforeach; ?>
                             </div>
                         </div>
-                        <div class="form-text text-muted mt-1" style="font-size: 11.5px;">Standard working statuses are pre-selected. High-value statuses (<strong>INT, Site Visits, Booked, Converted</strong>) are shielded by default to prevent accidental re-assignment.</div>
+                        <div class="form-text text-muted mt-1" style="font-size: 11.5px;">Standard working statuses are pre-selected. High-value statuses (<strong>INT, INT_VISIT_DONE</strong>) are shielded by default to prevent accidental re-assignment.</div>
+                    </div>
+
+                    <!-- 4. Date Range & Scope Filter -->
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-dark small text-uppercase mb-2">
+                            <i class="fa-solid fa-calendar-day text-primary me-1"></i>4. Date Range & Scope Filter
+                        </label>
+                        <div class="p-3 bg-light rounded-3 border">
+                            <div class="row g-2">
+                                <div class="col-md-4">
+                                    <div class="form-check p-2 rounded border bg-white h-100 shadow-sm">
+                                        <input class="form-check-input ms-1 me-2" type="radio" name="date_scope" id="scope_today" value="today" checked onchange="toggleShuffleDateInputs(this.value)">
+                                        <label class="form-check-label fw-bold text-dark small d-block" for="scope_today" style="cursor: pointer;">
+                                            <span class="text-success"><i class="fa-solid fa-calendar-check me-1"></i>Today's Fresh Leads Only (Default)</span>
+                                            <div class="text-muted fw-normal" style="font-size: 11px;">Strictly shuffles only new leads created today (DATE = Today). Historical leads are 100% safe.</div>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-check p-2 rounded border bg-white h-100 shadow-sm">
+                                        <input class="form-check-input ms-1 me-2" type="radio" name="date_scope" id="scope_custom" value="custom" onchange="toggleShuffleDateInputs(this.value)">
+                                        <label class="form-check-label fw-bold text-dark small d-block" for="scope_custom" style="cursor: pointer;">
+                                            <span class="text-primary"><i class="fa-solid fa-calendar-days me-1"></i>Specific Date / Range</span>
+                                            <div class="text-muted fw-normal" style="font-size: 11px;">Filter and shuffle leads by specific date or custom date range</div>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-check p-2 rounded border bg-white h-100 shadow-sm">
+                                        <input class="form-check-input ms-1 me-2" type="radio" name="date_scope" id="scope_all" value="all" onchange="toggleShuffleDateInputs(this.value)">
+                                        <label class="form-check-label fw-bold text-dark small d-block" for="scope_all" style="cursor: pointer;">
+                                            <span class="text-secondary"><i class="fa-solid fa-globe me-1"></i>All-Time Leads</span>
+                                            <div class="text-muted fw-normal" style="font-size: 11px;">Include all historical leads regardless of creation date</div>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Custom Date Range Row (Revealed when Specific Date / Range is selected) -->
+                            <div id="shuffleCustomDateRow" class="row g-2 mt-2 pt-2 border-top d-none">
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-semibold text-dark mb-1">From Date:</label>
+                                    <input type="date" name="shuffle_from_date" class="form-control form-control-sm bg-white" value="<?php echo date('Y-m-d'); ?>">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small fw-semibold text-dark mb-1">To Date:</label>
+                                    <input type="date" name="shuffle_to_date" class="form-control form-control-sm bg-white" value="<?php echo date('Y-m-d'); ?>">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-text text-success fw-semibold mt-1" style="font-size: 11.5px;">
+                            <i class="fa-solid fa-circle-check text-success me-1"></i>By default, only <strong>today's leads</strong> will be shuffled with no quantity limits.
+                        </div>
+                    </div>
+
+                    <!-- 5. Preview Leads Data Container (Loaded dynamically via previewShuffleData()) -->
+                    <div id="shufflePreviewContainer" class="mt-3 d-none">
+                        <!-- Content rendered dynamically via API -->
                     </div>
                 </div>
 
-                <div class="modal-footer bg-light border-top px-4 py-3 flex-shrink-0">
-                    <button type="button" class="btn btn-outline-secondary px-3" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary px-4 fw-semibold shadow-sm" onclick="return confirm('Are you sure you want to shuffle and reassign leads equally according to your selected telecallers and statuses?');">
-                        <i class="fa-solid fa-shuffle me-2"></i>Shuffle Leads Now
+                <div class="modal-footer bg-light border-top px-4 py-3 flex-shrink-0 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <button type="button" class="btn btn-outline-primary px-3 fw-semibold shadow-xs" id="btnPreviewShuffle" onclick="previewShuffleData()">
+                        <i class="fa-solid fa-magnifying-glass-chart me-1"></i> Preview Leads Data (डेटा प्रीव्यू देखें)
                     </button>
+                    <div class="d-flex align-items-center gap-2 ms-auto">
+                        <button type="button" class="btn btn-outline-secondary px-3" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary px-4 fw-semibold shadow-sm" onclick="return confirm('Are you sure you want to shuffle and reassign leads equally according to your selected telecallers and statuses?');">
+                            <i class="fa-solid fa-shuffle me-2"></i>Shuffle Leads Now
+                        </button>
+                    </div>
                 </div>
             </form>
         </div>
@@ -1619,14 +2306,25 @@ if (empty($all_projects)) {
                         <div class="col-md-6">
                             <label class="form-label fw-semibold text-dark">Select Sales Person / Sales Manager <span class="text-danger">*</span></label>
                             <select name="salesperson_id" class="form-select" required>
-                                <option value="" disabled selected>-- Choose Sales Person --</option>
-                                <?php 
-                                $sales_team_modal = $pdo->query("SELECT id, name, role, phone FROM users WHERE role = 'sales' AND (is_active IS NULL OR is_active = 1) ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
-                                foreach ($sales_team_modal as $sm): ?>
-                                    <option value="<?php echo $sm['id']; ?>">
-                                        <?php echo htmlspecialchars($sm['name']) . ' (Sales)'; ?>
-                                    </option>
-                                <?php endforeach; ?>
+                                <option value="" disabled selected>-- Choose Sales Manager or Executive --</option>
+                                <?php if(!empty($sales_managers_leads)): ?>
+                                    <optgroup label="🏢 Sales Managers (Will Delegate to Team or Handle)">
+                                        <?php foreach ($sales_managers_leads as $sm): ?>
+                                            <option value="<?php echo $sm['id']; ?>">
+                                                <?php echo htmlspecialchars($sm['name']) . (!empty($sm['branch_name']) ? ' ['.$sm['branch_name'].']' : '') . ' - Sales Manager'; ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </optgroup>
+                                <?php endif; ?>
+                                <?php if(!empty($sales_execs_leads)): ?>
+                                    <optgroup label="👤 Sales Executives / Field Team">
+                                        <?php foreach ($sales_execs_leads as $se): ?>
+                                            <option value="<?php echo $se['id']; ?>">
+                                                <?php echo htmlspecialchars($se['name']) . (!empty($se['manager_name']) ? ' (Under: '.$se['manager_name'].')' : '') . ' - Sales Exec'; ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </optgroup>
+                                <?php endif; ?>
                             </select>
                         </div>
                         <div class="col-md-6">
@@ -1641,11 +2339,9 @@ if (empty($all_projects)) {
                             <label class="form-label fw-semibold text-secondary small text-uppercase">Status Filter (Optional)</label>
                             <select name="status_filter" class="form-select">
                                 <option value="">All Statuses (Unassigned to Sales)</option>
-                                <option value="Follow Up">Follow Up (Interested)</option>
-                                <option value="In Progress">In Progress</option>
-                                <option value="New">New Leads</option>
-                                <option value="Site Visit Scheduled">Site Visit Scheduled</option>
-                                <option value="Site Visit Done">Site Visit Done</option>
+                                <?php foreach (getStrictLeadStatuses() as $st_code => $st_data): ?>
+                                    <option value="<?php echo $st_code; ?>"><?php echo htmlspecialchars($st_code); ?></option>
+                                <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="col-md-6">
@@ -1676,7 +2372,19 @@ if (empty($all_projects)) {
         </div>
     </div>
 
-    <!-- Datalist Suggestions for City and Influencer -->
+    <!-- Datalist Suggestions for City, Source, Project, and Influencer -->
+    <datalist id="sourceSuggestions">
+        <?php foreach (getCrmSourcesList($pdo) as $src_opt): ?>
+            <option value="<?php echo htmlspecialchars($src_opt); ?>">
+        <?php endforeach; ?>
+    </datalist>
+
+    <datalist id="projectSuggestions">
+        <?php foreach (getCrmProjectsList($pdo) as $pr_opt): ?>
+            <option value="<?php echo htmlspecialchars($pr_opt); ?>">
+        <?php endforeach; ?>
+    </datalist>
+
     <datalist id="citySuggestions">
         <option value="Delhi">
         <option value="Noida">
@@ -1698,14 +2406,13 @@ if (empty($all_projects)) {
     </datalist>
 
     <datalist id="influencerSuggestions">
+        <?php foreach (getCrmCampaignsList($pdo) as $cmp_opt): ?>
+            <option value="<?php echo htmlspecialchars($cmp_opt); ?>">
+        <?php endforeach; ?>
         <option value="Direct Client">
         <option value="Channel Partner (CP)">
         <option value="Broker">
         <option value="Referral">
-        <option value="Investor">
-        <option value="Digital Marketing">
-        <option value="Self Sourced">
-        <option value="Company Lead">
     </datalist>
 
     <!-- Modal: Comprehensive Cross-Inquiry Customer History Timeline -->
@@ -1736,7 +2443,7 @@ if (empty($all_projects)) {
 
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="assets/js/app.js?v=2.2"></script>
+    <script src="assets/js/app.js?v=<?php echo time(); ?>"></script>
     <script>
     function toggleAllCheckboxes(className, isChecked) {
         document.querySelectorAll('.' + className).forEach(function(cb) {
@@ -1943,10 +2650,175 @@ if (empty($all_projects)) {
             return false;
         }
     });
+
+    // Toggle Specific Date / Custom Range picker in Shuffle Modal
+    window.toggleShuffleDateInputs = function(val) {
+        var row = document.getElementById('shuffleCustomDateRow');
+        if (row) {
+            if (val === 'custom') {
+                row.classList.remove('d-none');
+            } else {
+                row.classList.add('d-none');
+            }
+        }
+    };
+
+    // Preview Leads Data before Shuffle
+    window.previewShuffleData = function() {
+        var modal = $('#shuffleLeadsModal');
+        var form = modal.find('form');
+        var container = $('#shufflePreviewContainer');
+
+        container.removeClass('d-none').html(`
+            <div class="p-4 text-center bg-white rounded-3 border shadow-xs my-2">
+                <div class="spinner-border text-primary spinner-border-sm mb-2" role="status"></div>
+                <div class="fw-bold text-dark small">सफल किए जाने वाले लीड्स का डेटा प्रीव्यू लोड हो रहा है...</div>
+                <div class="text-muted" style="font-size: 11px;">Querying candidate leads and calculating equal distribution plan...</div>
+            </div>
+        `);
+
+        var formData = new FormData(form[0]);
+
+        fetch('api/preview_shuffle_leads.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(res => {
+            if (res.status !== 'success') {
+                container.html(`
+                    <div class="alert alert-danger py-2 px-3 small border-0 mb-0" style="border-radius: 8px;">
+                        <i class="fa-solid fa-triangle-exclamation me-1"></i><strong>Preview Error:</strong> ${res.message || 'Failed to generate preview.'}
+                    </div>
+                `);
+                return;
+            }
+
+            var total = res.total_candidates || 0;
+            if (total === 0) {
+                container.html(`
+                    <div class="alert alert-warning py-3 px-4 border-0 mb-0 text-center" style="border-radius: 10px; background-color: #fef3c7;">
+                        <div class="fw-bold text-warning-emphasis mb-1"><i class="fa-solid fa-circle-exclamation me-1"></i>No Candidate Leads Found (0 Leads)</div>
+                        <div class="small text-muted">Aapke chune huye criteria (Date Scope, Source Telecallers, Statuses) ke anusaar koi candidate lead nahi mili. Kripya Source Telecallers ya Status filters check karein.</div>
+                    </div>
+                `);
+                return;
+            }
+
+            var stPills = '';
+            for (var st in res.status_breakdown) {
+                stPills += `<span class="badge bg-light text-dark border px-2 py-1 font-monospace" style="font-size: 11px;">${st}: <strong>${res.status_breakdown[st]}</strong></span> `;
+            }
+
+            var srcPills = '';
+            for (var src in res.source_breakdown) {
+                srcPills += `<span class="badge bg-light text-primary border px-2 py-1" style="font-size: 11px;">${src}: <strong>${res.source_breakdown[src]}</strong></span> `;
+            }
+
+            var distRows = '';
+            (res.target_distribution || []).forEach(function(item) {
+                distRows += `
+                    <div class="col-sm-6 col-md-4 col-lg-3">
+                        <div class="p-2 border rounded-2 bg-light text-center h-100">
+                            <div class="small fw-semibold text-dark text-truncate" title="${item.name}"><i class="fa-solid fa-user me-1 text-success"></i>${item.name}</div>
+                            <div class="badge bg-success text-white mt-1 px-2 py-0.5" style="font-size: 11px;">~${item.estimated_leads} Leads</div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            var sampleRows = '';
+            (res.sample_leads || []).forEach(function(l) {
+                sampleRows += `
+                    <tr>
+                        <td class="font-monospace fw-bold text-dark" style="font-size: 11px;">#${l.lead_code || l.id}</td>
+                        <td class="fw-semibold text-dark" style="font-size: 12px;">${l.name}</td>
+                        <td class="font-monospace text-muted" style="font-size: 11px;">${l.phone_display || l.phone}</td>
+                        <td style="font-size: 11.5px;">${l.project || 'General'}</td>
+                        <td><span class="badge bg-light text-secondary border font-monospace" style="font-size: 10.5px;">${l.status}</span></td>
+                        <td class="small text-dark" style="font-size: 11px;"><i class="fa-solid fa-user me-1 text-muted"></i>${l.current_owner || 'Unassigned'}</td>
+                        <td class="small text-muted" style="font-size: 10.5px;">${l.created_date_formatted || '-'}</td>
+                    </tr>
+                `;
+            });
+
+            var html = `
+                <div class="p-3 bg-white rounded-3 border shadow-sm my-2">
+                    <div class="d-flex align-items-center justify-content-between mb-3 pb-2 border-bottom flex-wrap gap-2">
+                        <div>
+                            <span class="badge bg-success text-white px-2.5 py-1 fw-bold" style="font-size: 12px;">
+                                <i class="fa-solid fa-check-circle me-1"></i>Total ${total} Candidate Leads Ready to Shuffle
+                            </span>
+                            <span class="small text-muted ms-2">Equal distribution across ${res.target_count || 0} destination telecaller(s)</span>
+                        </div>
+                        <button type="button" class="btn btn-xs btn-outline-secondary py-0.5 px-2" style="font-size: 11px;" onclick="$('#shufflePreviewContainer').addClass('d-none');">
+                            <i class="fa-solid fa-times me-1"></i>Close Preview
+                        </button>
+                    </div>
+
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <div class="small fw-bold text-dark text-uppercase mb-1" style="font-size: 11px;"><i class="fa-solid fa-tag me-1 text-warning"></i>Lead Status Breakdown:</div>
+                            <div class="d-flex flex-wrap gap-1">${stPills || '<span class="text-muted small">None</span>'}</div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="small fw-bold text-dark text-uppercase mb-1" style="font-size: 11px;"><i class="fa-solid fa-user-minus me-1 text-primary"></i>Source Telecallers (From):</div>
+                            <div class="d-flex flex-wrap gap-1">${srcPills || '<span class="text-muted small">None</span>'}</div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="small fw-bold text-dark text-uppercase mb-1.5" style="font-size: 11px;"><i class="fa-solid fa-arrows-split-up-and-left me-1 text-success"></i>Proposed Equal Allocation per Destination Telecaller:</div>
+                        <div class="row g-2">${distRows}</div>
+                    </div>
+
+                    <div>
+                        <div class="small fw-bold text-dark text-uppercase mb-1" style="font-size: 11px;"><i class="fa-solid fa-eye me-1 text-info"></i>Sample Candidate Leads Preview (Top 15):</div>
+                        <div class="table-responsive border rounded-2" style="max-height: 220px; overflow-y: auto;">
+                            <table class="table table-sm table-hover align-middle mb-0" style="font-size: 11.5px;">
+                                <thead class="table-light sticky-top">
+                                    <tr>
+                                        <th>Lead #</th>
+                                        <th>Customer</th>
+                                        <th>Phone</th>
+                                        <th>Project</th>
+                                        <th>Current Status</th>
+                                        <th>Current Owner</th>
+                                        <th>Created Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${sampleRows}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            container.html(html);
+        })
+        .catch(err => {
+            container.html(`
+                <div class="alert alert-danger py-2 px-3 small border-0 mb-0" style="border-radius: 8px;">
+                    <i class="fa-solid fa-triangle-exclamation me-1"></i><strong>Error:</strong> Failed to fetch preview data: ${err.message}
+                </div>
+            `);
+        });
+    };
     </script>
+
+    <!-- Modal: Manage Site Locations -->
+    <?php include 'includes/site_location_modal.php'; ?>
+
+    <!-- Modal: Manage Dynamic Budget Ranges -->
+    <?php include 'includes/budget_modal.php'; ?>
 
     <!-- Modal: Complete Lead Lifecycle & Audit Journey -->
     <?php include 'includes/lead_journey_modal.php'; ?>
+
+    <!-- Master OS Directory Selection Modal -->
+    <?php include 'includes/os_selection_modal.php'; ?>
 </body>
 </html>
 

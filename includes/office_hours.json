@@ -1,0 +1,21 @@
+{
+    "enabled": 1,
+    "start_time": "10:00",
+    "end_time": "19:00",
+    "days": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7"
+    ],
+    "timezone": "Asia\/Kolkata",
+    "restricted_roles": [
+        "telecaller",
+        "sales"
+    ],
+    "allow_today_date": "",
+    "override_until": 0
+}

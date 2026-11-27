@@ -1,0 +1,9 @@
+{
+    "sender_email": "support@akinfracrm.com",
+    "sender_name": "AK Infra CRM Admin",
+    "smtp_username": "support@akinfracrm.com",
+    "smtp_password": "",
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "bcc_admin_email": ""
+}

@@ -7,10 +7,10 @@
     --primary-light: #e0e7ff;
 
     /* Sidebar */
-    --sidebar-bg: #0f172a;
-    --sidebar-text: #94a3b8;
-    --sidebar-active-bg: rgba(255, 255, 255, 0.05);
-    --sidebar-active-text: #ffffff;
+    --sidebar-bg: #ffffff;
+    --sidebar-text: #1e293b;
+    --sidebar-active-bg: #eef2ff;
+    --sidebar-active-text: #0f172a;
 
     /* Backgrounds */
     --body-bg: #f8fafc;
@@ -65,11 +65,12 @@ h6 {
     left: 0;
     height: 100vh;
     max-height: 100vh;
-    background: var(--sidebar-bg);
-    color: var(--sidebar-text);
+    background: #ffffff;
+    color: #1e293b;
+    border-right: 1px solid #e2e8f0;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     z-index: 1000;
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.05);
+    box-shadow: 2px 0 16px rgba(15, 23, 42, 0.04);
     overflow-y: auto !important;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
@@ -81,34 +82,39 @@ h6 {
 }
 
 #sidebar::-webkit-scrollbar-track {
-    background: rgba(15, 23, 42, 0.6);
+    background: #ffffff;
 }
 
 #sidebar::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.25);
+    background: #e2e8f0;
     border-radius: 4px;
 }
 
 #sidebar::-webkit-scrollbar-thumb:hover {
-    background: rgba(148, 163, 184, 0.5);
+    background: #cbd5e1;
 }
 
 #sidebar .sidebar-header {
     padding: 20px 24px;
     font-size: 1.15rem;
     font-weight: 800;
-    color: #fff;
+    color: #0f172a;
     display: flex;
     align-items: center;
     gap: 12px;
     letter-spacing: -0.02em;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid #e2e8f0;
     margin-bottom: 12px;
     transition: all 0.3s;
     position: sticky;
     top: 0;
-    background: var(--sidebar-bg);
+    background: #ffffff;
     z-index: 10;
+}
+
+#sidebar .sidebar-header span {
+    color: #0f172a !important;
+    font-weight: 800;
 }
 
 #sidebar .sidebar-header img {
@@ -123,13 +129,13 @@ h6 {
 }
 
 #sidebar ul li.sidebar-heading {
-    color: #94a3b8;
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    text-transform: none;
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
     padding: 16px 14px 6px 14px;
-    opacity: 0.85;
+    opacity: 1;
 }
 
 #sidebar ul li a {
@@ -137,9 +143,9 @@ h6 {
     font-size: 0.88rem;
     display: flex;
     align-items: center;
-    color: #94a3b8;
+    color: #1e293b;
     text-decoration: none;
-    font-weight: 500;
+    font-weight: 600;
     border-radius: 10px;
     margin-bottom: 3px;
     line-height: 1.3;
@@ -150,7 +156,7 @@ h6 {
     width: 22px;
     font-size: 1rem;
     margin-right: 10px;
-    color: #818cf8;
+    color: #64748b;
     transition: all 0.2s ease;
     text-align: center;
     flex-shrink: 0;
@@ -160,27 +166,29 @@ h6 {
     transition: opacity 0.3s ease;
     white-space: normal;
     word-break: break-word;
+    color: inherit;
 }
 
 #sidebar ul li a:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: #ffffff;
+    background: #f1f5f9;
+    color: #000000;
     transform: translateX(3px);
 }
 
 #sidebar ul li a:hover i {
-    color: #a5b4fc;
+    color: #4f46e5;
 }
 
 #sidebar ul li.active>a {
-    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-    color: #ffffff;
-    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
-    font-weight: 600;
+    background: #eef2ff;
+    color: #0f172a;
+    box-shadow: none;
+    border-left: 3px solid #4f46e5;
+    font-weight: 700;
 }
 
 #sidebar ul li.active>a i {
-    color: #ffffff;
+    color: #4f46e5;
 }
 
 #content {
@@ -194,42 +202,50 @@ h6 {
 
 /* Sidebar Mini Class (Desktop Only) */
 @media (min-width: 993px) {
-    body.sidebar-mini #sidebar {
-        width: 80px;
+    body.sidebar-mini #sidebar,
+    #sidebar.sidebar-collapsed {
+        width: 80px !important;
     }
 
     body.sidebar-mini #content {
-        margin-left: 80px;
-        width: calc(100% - 80px);
+        margin-left: 80px !important;
+        width: calc(100% - 80px) !important;
     }
 
     /* Completely hide text labels, category headers, and logo text in collapsed mini mode */
     body.sidebar-mini #sidebar .nav-text,
     body.sidebar-mini #sidebar .sidebar-header span,
-    body.sidebar-mini #sidebar .sidebar-heading {
+    body.sidebar-mini #sidebar .sidebar-heading,
+    #sidebar.sidebar-collapsed .nav-text,
+    #sidebar.sidebar-collapsed .sidebar-header span,
+    #sidebar.sidebar-collapsed .sidebar-heading {
         opacity: 0 !important;
         display: none !important;
         visibility: hidden !important;
     }
 
-    body.sidebar-mini #sidebar .sidebar-header {
+    body.sidebar-mini #sidebar .sidebar-header,
+    #sidebar.sidebar-collapsed .sidebar-header {
         padding: 20px 0;
         justify-content: center;
     }
 
-    body.sidebar-mini #sidebar .sidebar-header img {
+    body.sidebar-mini #sidebar .sidebar-header img,
+    #sidebar.sidebar-collapsed .sidebar-header img {
         width: 50px !important;
         max-width: 50px !important;
     }
 
-    body.sidebar-mini #sidebar ul li a {
+    body.sidebar-mini #sidebar ul li a,
+    #sidebar.sidebar-collapsed ul li a {
         justify-content: center;
         padding: 14px 0;
         text-align: center;
         position: relative;
     }
 
-    body.sidebar-mini #sidebar ul li a i {
+    body.sidebar-mini #sidebar ul li a i,
+    #sidebar.sidebar-collapsed ul li a i {
         margin-right: 0 !important;
         font-size: 1.35rem;
     }
@@ -262,6 +278,86 @@ h6 {
         visibility: visible;
         transform: translateY(-50%) translateX(12px);
     }
+
+    /* Impersonation / Masquerade Box in Mini Sidebar Mode */
+    body.sidebar-mini #sidebar .impersonation-box,
+    #sidebar.sidebar-collapsed .impersonation-box {
+        margin: 10px auto 14px !important;
+        padding: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        width: 100% !important;
+        display: flex !important;
+        justify-content: center !important;
+    }
+    body.sidebar-mini #sidebar .impersonation-box .impersonation-full,
+    #sidebar.sidebar-collapsed .impersonation-box .impersonation-full {
+        display: none !important;
+    }
+    body.sidebar-mini #sidebar .impersonation-box .impersonation-mini,
+    #sidebar.sidebar-collapsed .impersonation-box .impersonation-mini {
+        display: block !important;
+    }
+}
+
+/* Impersonation / Masquerade Box in Sidebar */
+.impersonation-box {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #fff;
+    padding: 10px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+    border-radius: 10px;
+    margin: 10px 12px 14px;
+    box-shadow: 0 4px 10px rgba(245, 158, 11, 0.25);
+    transition: all 0.25s ease;
+    overflow: hidden;
+}
+.impersonation-box .impersonation-full {
+    display: block;
+}
+.impersonation-box .impersonation-mini {
+    display: none;
+}
+.impersonation-exit-btn {
+    display: inline-block;
+    margin-top: 6px;
+    background: #ffffff;
+    color: #b45309;
+    padding: 4px 12px;
+    border-radius: 20px;
+    text-decoration: none;
+    font-size: 10.5px;
+    font-weight: 800;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    white-space: nowrap;
+    transition: all 0.2s ease;
+}
+.impersonation-exit-btn:hover {
+    background: #fffbeb;
+    color: #92400e;
+    transform: translateY(-1px);
+}
+.impersonation-mini-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    text-decoration: none;
+    margin: 0 auto;
+    box-shadow: 0 4px 10px rgba(245, 158, 11, 0.35);
+    transition: all 0.2s ease;
+}
+.impersonation-mini-btn:hover {
+    color: #ffffff;
+    transform: scale(1.08);
+    box-shadow: 0 6px 14px rgba(245, 158, 11, 0.45);
 }
 
 /* Top Navbar */
@@ -340,7 +436,13 @@ h6 {
 }
 
 .bg-gradient-warning {
-    background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%) !important;
+    background: linear-gradient(135deg, #ea580c 0%, #f59e0b 100%) !important;
+    border: none;
+    color: #fff !important;
+}
+
+.bg-gradient-danger {
+    background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%) !important;
     border: none;
     color: #fff !important;
 }
@@ -861,7 +963,7 @@ h6 {
    COMPLETE MOBILE RESPONSIVE STYLES
    ============================================ */
 
-/* Sidebar toggle overlay on mobile */
+/* Sidebar toggle overlay on mobile ONLY */
 #sidebarOverlay,
 .sidebar-overlay,
 #sidebar-overlay {
@@ -878,12 +980,31 @@ h6 {
     -webkit-backdrop-filter: blur(4px);
 }
 
-#sidebarOverlay.active,
-.sidebar-overlay.active,
-#sidebar-overlay.active,
-body.sidebar-open #sidebarOverlay,
-body.sidebar-open .sidebar-overlay {
-    display: block !important;
+@media (min-width: 993px) {
+    #sidebarOverlay,
+    .sidebar-overlay,
+    #sidebar-overlay,
+    #sidebarOverlay.active,
+    .sidebar-overlay.active,
+    #sidebar-overlay.active,
+    body.sidebar-open #sidebarOverlay,
+    body.sidebar-open .sidebar-overlay {
+        display: none !important;
+        pointer-events: none !important;
+        visibility: hidden !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+}
+
+@media (max-width: 992px) {
+    #sidebarOverlay.active,
+    .sidebar-overlay.active,
+    #sidebar-overlay.active,
+    body.sidebar-open #sidebarOverlay,
+    body.sidebar-open .sidebar-overlay {
+        display: block !important;
+    }
 }
 
 /* ---- TABLET & MOBILE (992px and below) ---- */
@@ -1426,11 +1547,14 @@ select.table-inline-status:focus,
 }
 
 /* Status: Incoming Off -> Warm Stone Gray */
+.table-inline-status[data-current-status="OTH_INCOMING_OFF"],
 .table-inline-status[data-current-status="Incoming Off"] {
     background-color: #78716c !important;
     color: #ffffff !important;
     border-color: #57534e !important;
 }
+.table-inline-status[data-current-status="OTH_INCOMING_OFF"]:hover,
+.table-inline-status[data-current-status="OTH_INCOMING_OFF"]:focus,
 .table-inline-status[data-current-status="Incoming Off"]:hover,
 .table-inline-status[data-current-status="Incoming Off"]:focus {
     background-color: #57534e !important;
@@ -1438,11 +1562,14 @@ select.table-inline-status:focus,
 }
 
 /* Status: Call Forwarding -> Cyan */
+.table-inline-status[data-current-status="OTH_CALL_FORWARDED"],
 .table-inline-status[data-current-status="Call Forwarding"] {
     background-color: #0891b2 !important;
     color: #ffffff !important;
     border-color: #0e7490 !important;
 }
+.table-inline-status[data-current-status="OTH_CALL_FORWARDED"]:hover,
+.table-inline-status[data-current-status="OTH_CALL_FORWARDED"]:focus,
 .table-inline-status[data-current-status="Call Forwarding"]:hover,
 .table-inline-status[data-current-status="Call Forwarding"]:focus {
     background-color: #0e7490 !important;
@@ -1451,6 +1578,7 @@ select.table-inline-status:focus,
 
 /* Status: OS / Out of Service -> Dark Slate */
 .table-inline-status[data-current-status="OS"],
+.table-inline-status[data-current-status="OTH_OUT_OF_SERVICE"],
 .table-inline-status[data-current-status="Out of Service"] {
     background-color: #475569 !important;
     color: #ffffff !important;
@@ -1458,18 +1586,23 @@ select.table-inline-status:focus,
 }
 .table-inline-status[data-current-status="OS"]:hover,
 .table-inline-status[data-current-status="OS"]:focus,
+.table-inline-status[data-current-status="OTH_OUT_OF_SERVICE"]:hover,
+.table-inline-status[data-current-status="OTH_OUT_OF_SERVICE"]:focus,
 .table-inline-status[data-current-status="Out of Service"]:hover,
 .table-inline-status[data-current-status="Out of Service"]:focus {
     background-color: #334155 !important;
     color: #ffffff !important;
 }
 
-/* Status: OTH_NETWORK -> Teal */
+/* Status: OTH_NETWORK_ISSUE -> Teal */
+.table-inline-status[data-current-status="OTH_NETWORK_ISSUE"],
 .table-inline-status[data-current-status="OTH_NETWORK"] {
     background-color: #0d9488 !important;
     color: #ffffff !important;
     border-color: #0f766e !important;
 }
+.table-inline-status[data-current-status="OTH_NETWORK_ISSUE"]:hover,
+.table-inline-status[data-current-status="OTH_NETWORK_ISSUE"]:focus,
 .table-inline-status[data-current-status="OTH_NETWORK"]:hover,
 .table-inline-status[data-current-status="OTH_NETWORK"]:focus {
     background-color: #0f766e !important;
@@ -1489,17 +1622,65 @@ select.table-inline-status:focus,
 }
 
 /* Status: Invalid Number / Wrong Number -> Crimson */
+.table-inline-status[data-current-status="OTH_INVALID_NUMBER"],
 .table-inline-status[data-current-status="Invalid Number"],
 .table-inline-status[data-current-status="Wrong Number"] {
     background-color: #9f1239 !important;
     color: #ffffff !important;
     border-color: #881337 !important;
 }
+.table-inline-status[data-current-status="OTH_INVALID_NUMBER"]:hover,
+.table-inline-status[data-current-status="OTH_INVALID_NUMBER"]:focus,
 .table-inline-status[data-current-status="Invalid Number"]:hover,
 .table-inline-status[data-current-status="Invalid Number"]:focus,
 .table-inline-status[data-current-status="Wrong Number"]:hover,
 .table-inline-status[data-current-status="Wrong Number"]:focus {
     background-color: #881337 !important;
+    color: #ffffff !important;
+}
+
+/* Status: INT_VISIT_DONE -> Emerald Green */
+.table-inline-status[data-current-status="INT_VISIT_DONE"],
+.table-inline-status[data-current-status="Site Visit Done"] {
+    background-color: #059669 !important;
+    color: #ffffff !important;
+    border-color: #047857 !important;
+}
+.table-inline-status[data-current-status="INT_VISIT_DONE"]:hover,
+.table-inline-status[data-current-status="INT_VISIT_DONE"]:focus,
+.table-inline-status[data-current-status="Site Visit Done"]:hover,
+.table-inline-status[data-current-status="Site Visit Done"]:focus {
+    background-color: #047857 !important;
+    color: #ffffff !important;
+}
+
+/* Status: NI_FO -> Burnt Orange */
+.table-inline-status[data-current-status="NI_FO"] {
+    background-color: #b45309 !important;
+    color: #ffffff !important;
+    border-color: #92400e !important;
+}
+.table-inline-status[data-current-status="NI_FO"]:hover,
+.table-inline-status[data-current-status="NI_FO"]:focus {
+    background-color: #92400e !important;
+    color: #ffffff !important;
+}
+
+/* Status: OTH_CALL_DISCONNECTED -> Rose Red */
+.table-inline-status[data-current-status="OTH_CALL_DISCONNECTED"],
+.table-inline-status[data-current-status="Call Disconnect"],
+.table-inline-status[data-current-status="Call Disconnected"] {
+    background-color: #e11d48 !important;
+    color: #ffffff !important;
+    border-color: #be123c !important;
+}
+.table-inline-status[data-current-status="OTH_CALL_DISCONNECTED"]:hover,
+.table-inline-status[data-current-status="OTH_CALL_DISCONNECTED"]:focus,
+.table-inline-status[data-current-status="Call Disconnect"]:hover,
+.table-inline-status[data-current-status="Call Disconnect"]:focus,
+.table-inline-status[data-current-status="Call Disconnected"]:hover,
+.table-inline-status[data-current-status="Call Disconnected"]:focus {
+    background-color: #be123c !important;
     color: #ffffff !important;
 }
 
@@ -1624,21 +1805,23 @@ select.table-inline-status:focus,
 }
 .table-inline-status option[value="INT"], .table-inline-status option[value="Interested"] { background-color: #16a34a !important; color: #ffffff !important; }
 .table-inline-status option[value="NI"], .table-inline-status option[value="Not Interested"] { background-color: #dc2626 !important; color: #ffffff !important; }
+.table-inline-status option[value="OS"] { background-color: #475569 !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH"] { background-color: #6b7280 !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_NOT_PICK"], .table-inline-status option[value="RNR (No Response)"] { background-color: #7c3aed !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_BUSY"], .table-inline-status option[value="Busy / Callback"] { background-color: #4f46e5 !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_SWITCH_OFF"], .table-inline-status option[value="Switched Off"] { background-color: #64748b !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_NETWORK_ISSUE"], .table-inline-status option[value="OTH_NETWORK"] { background-color: #0d9488 !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_CALL_BACK"], .table-inline-status option[value="OTH Call Back"] { background-color: #ea580c !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_INCOMING_OFF"], .table-inline-status option[value="Incoming Off"] { background-color: #78716c !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_CALL_DISCONNECTED"], .table-inline-status option[value="Call Disconnect"], .table-inline-status option[value="Call Disconnected"] { background-color: #e11d48 !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_INVALID_NUMBER"], .table-inline-status option[value="Invalid Number"], .table-inline-status option[value="Wrong Number"] { background-color: #9f1239 !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_OUT_OF_SERVICE"], .table-inline-status option[value="Out of Service"] { background-color: #334155 !important; color: #ffffff !important; }
+.table-inline-status option[value="OTH_CALL_FORWARDED"], .table-inline-status option[value="Call Forwarding"] { background-color: #0891b2 !important; color: #ffffff !important; }
+.table-inline-status option[value="INT_VISIT_DONE"], .table-inline-status option[value="Site Visit Done"] { background-color: #059669 !important; color: #ffffff !important; }
+.table-inline-status option[value="NI_FO"] { background-color: #b45309 !important; color: #ffffff !important; }
 .table-inline-status option[value="New"] { background-color: #0284c7 !important; color: #ffffff !important; }
 .table-inline-status option[value="Follow Up"] { background-color: #d97706 !important; color: #ffffff !important; }
-.table-inline-status option[value="OTH Call Back"], .table-inline-status option[value="OTH_CALL_BACK"] { background-color: #ea580c !important; color: #ffffff !important; }
-.table-inline-status option[value="Call Disconnect"], .table-inline-status option[value="Call Disconnected"] { background-color: #e11d48 !important; color: #ffffff !important; }
-.table-inline-status option[value="OTH_BUSY"], .table-inline-status option[value="Busy / Callback"] { background-color: #4f46e5 !important; color: #ffffff !important; }
-.table-inline-status option[value="OTH_NOT_PICK"], .table-inline-status option[value="RNR (No Response)"] { background-color: #7c3aed !important; color: #ffffff !important; }
-.table-inline-status option[value="OTH_SWITCH_OFF"], .table-inline-status option[value="Switched Off"] { background-color: #64748b !important; color: #ffffff !important; }
-.table-inline-status option[value="Incoming Off"] { background-color: #78716c !important; color: #ffffff !important; }
-.table-inline-status option[value="Call Forwarding"] { background-color: #0891b2 !important; color: #ffffff !important; }
-.table-inline-status option[value="OS"], .table-inline-status option[value="Out of Service"] { background-color: #475569 !important; color: #ffffff !important; }
-.table-inline-status option[value="OTH_NETWORK"] { background-color: #0d9488 !important; color: #ffffff !important; }
-.table-inline-status option[value="OTH"] { background-color: #6b7280 !important; color: #ffffff !important; }
-.table-inline-status option[value="Invalid Number"], .table-inline-status option[value="Wrong Number"] { background-color: #9f1239 !important; color: #ffffff !important; }
 .table-inline-status option[value="Site Visit Scheduled"] { background-color: #9333ea !important; color: #ffffff !important; }
-.table-inline-status option[value="Site Visit Done"] { background-color: #059669 !important; color: #ffffff !important; }
 .table-inline-status option[value="Re-Visit Scheduled"] { background-color: #a855f7 !important; color: #ffffff !important; }
 .table-inline-status option[value="Negotiation"] { background-color: #c2410c !important; color: #ffffff !important; }
 .table-inline-status option[value="Assigned to Sales"] { background-color: #2563eb !important; color: #ffffff !important; }
@@ -1762,12 +1945,28 @@ select.table-inline-status:focus,
    ========================================================================== */
 .excel-table-container {
     background: #ffffff;
-    /* border-radius: 10px; */
-    /* box-shadow: 0 4px 18px rgba(0, 0, 0, 0.06); */
-    /* border: 1px solid #d1d5db; */
     overflow-x: auto;
+    overflow-y: auto;
+    max-height: calc(100vh - 210px);
     position: relative;
     max-width: 100%;
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 #f8fafc;
+}
+
+.excel-table-container::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+.excel-table-container::-webkit-scrollbar-track {
+    background: #f8fafc;
+}
+.excel-table-container::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+.excel-table-container::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
 }
 
 .excel-spreadsheet-table {
@@ -1779,7 +1978,7 @@ select.table-inline-status:focus,
     /* border: 1px solid #9ca3af; */
 }
 
-/* Custom Client Maroon/Plum Header Styling */
+/* Custom Client Maroon/Plum Header Styling - Fixed / Sticky */
 .excel-spreadsheet-table thead th {
     background-color: #932752 !important;
     color: #ffffff !important;
@@ -1793,9 +1992,10 @@ select.table-inline-status:focus,
     border-right: 1px solid #b3396a !important;
     border-bottom: 2px solid #6b1839 !important;
     white-space: nowrap !important;
-    position: sticky;
-    top: 0;
-    z-index: 10;
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 25 !important;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.16) !important;
 }
 
 .excel-spreadsheet-table thead th:last-child {

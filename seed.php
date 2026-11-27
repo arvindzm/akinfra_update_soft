@@ -33,7 +33,7 @@ try {
     $names = ['Amit Sharma', 'Rohan Gupta', 'Pooja Singh', 'Suresh Verma', 'Anita Desai', 'Karan Patel', 'Megha Kapoor', 'Sunil Yadav', 'Divya Jain', 'Ravi Kumar', 'Sneha Reddy', 'Aditya Joshi', 'Kavita Mishra', 'Rajesh Tiwari', 'Priya Bhatia', 'Gaurav Agarwal', 'Shruti Iyer', 'Nitin Chawla', 'Ritu Saxena', 'Varun Rao'];
     
     $sources = ['Meta Ads', 'Google Ads', 'Website', 'Manual'];
-    $statuses = ['New', 'In Progress', 'Assigned to Sales', 'Converted', 'Dead'];
+    $statuses = ['INT', 'NI', 'OS', 'OTH', 'OTH_NOT_PICK', 'OTH_BUSY', 'OTH_CALL_BACK', 'INT_VISIT_DONE', 'NI_FO'];
     
     // Clear existing leads for a clean slate
     $pdo->exec("DELETE FROM lead_notes");
